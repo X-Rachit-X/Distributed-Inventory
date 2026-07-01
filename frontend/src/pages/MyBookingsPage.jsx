@@ -28,24 +28,29 @@ export default function MyBookingsPage() {
     }
   };
 
-  useEffect(() => {
-    fetchBookings(statusFilter, 1);
-  }, [statusFilter]);
+  useEffect(() => { fetchBookings(statusFilter, 1); }, [statusFilter]);
 
-  const handlePageChange = (page) => {
-    fetchBookings(statusFilter, page);
-  };
+  const handlePageChange = (page) => fetchBookings(statusFilter, page);
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold mb-6">My Bookings</h1>
+    <div className="section-container py-8">
+      <div className="mb-8">
+        <h1 className="font-display text-2xl font-bold text-surface-900 mb-1">My Bookings</h1>
+        <p className="text-surface-500 text-sm">View and manage all your train journeys</p>
+      </div>
 
       <BookingFilters active={statusFilter} onChange={(v) => setStatusFilter(v)} />
 
       {loading ? (
-        <div className="flex justify-center py-16"><Spinner size="lg" /></div>
+        <div className="flex flex-col items-center justify-center py-20 gap-4">
+          <Spinner size="lg" />
+          <p className="text-surface-400 text-sm animate-pulse">Loading your bookings…</p>
+        </div>
       ) : bookings.length === 0 ? (
-        <EmptyState title="No bookings found" message={statusFilter ? 'Try a different filter' : 'Book your first train ticket!'} />
+        <EmptyState
+          title="No bookings found"
+          message={statusFilter ? 'Try a different status filter.' : "You haven't booked any trips yet. Search for a train to get started."}
+        />
       ) : (
         <>
           <div className="space-y-3">

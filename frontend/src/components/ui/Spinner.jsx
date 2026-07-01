@@ -1,6 +1,20 @@
-export default function Spinner({ size = 'md', className = '' }) {
-  const sizes = { sm: 'h-4 w-4', md: 'h-8 w-8', lg: 'h-12 w-12' };
+export default function Spinner({ size = 'md', light = false }) {
+  const sizes = {
+    sm: 'w-4 h-4 border-[1.5px]',
+    md: 'w-6 h-6 border-2',
+    lg: 'w-10 h-10 border-[3px]',
+    xl: 'w-14 h-14 border-4',
+  };
+
+  const colorClass = light
+    ? 'border-white/30 border-t-white'
+    : 'border-primary-200 border-t-primary-600';
+
   return (
-    <div className={`animate-spin rounded-full border-b-2 border-primary-900 ${sizes[size]} ${className}`} />
+    <div
+      role="status"
+      aria-label="Loading"
+      className={`${sizes[size]} ${colorClass} rounded-full animate-spin`}
+    />
   );
 }

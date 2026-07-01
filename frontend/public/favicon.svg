@@ -1,4 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="4" fill="#1a237e"/>
-  <text x="16" y="23" text-anchor="middle" fill="white" font-size="18" font-weight="bold" font-family="Arial">IR</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <rect width="32" height="32" rx="8" fill="#312e81"/>
+  <!-- Train body -->
+  <rect x="6" y="12" width="20" height="10" rx="3" fill="#6366f1"/>
+  <!-- Windows -->
+  <rect x="9" y="14" width="4" height="4" rx="1" fill="white" opacity="0.9"/>
+  <rect x="15" y="14" width="4" height="4" rx="1" fill="white" opacity="0.9"/>
+  <!-- Wheels -->
+  <circle cx="10" cy="23" r="2.5" fill="#fbbf24" stroke="#312e81" stroke-width="0.5"/>
+  <circle cx="22" cy="23" r="2.5" fill="#fbbf24" stroke="#312e81" stroke-width="0.5"/>
+  <!-- Rail -->
+  <rect x="3" y="25.5" width="26" height="1.5" rx="0.75" fill="#4338ca"/>
+  <!-- Speed lines -->
+  <rect x="3" y="10" width="5" height="1.2" rx="0.6" fill="#a5b4fc"/>
+  <rect x="3" y="12.5" width="3" height="1.2" rx="0.6" fill="#a5b4fc" opacity="0.6"/>
 </svg>

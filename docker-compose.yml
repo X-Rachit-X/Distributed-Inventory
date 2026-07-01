@@ -1,4 +1,4 @@
-name: irctc-backend
+name: scalerail
 
 services:
   postgres:
@@ -7,14 +7,14 @@ services:
     restart: always
     environment:
       POSTGRES_USER: admin
-      POSTGRES_PASSWORD: irctcpass
+      POSTGRES_PASSWORD: scalerailpass
       POSTGRES_DB: postgres
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
-      - irctc-network
+      - scalerail-network
   
   pgadmin: 
     image: dpage/pgadmin4
@@ -27,21 +27,22 @@ services:
     depends_on:
       - postgres
     networks:
-      - irctc-network
+      - scalerail-network
 
   redis:
     image: redis/redis-stack:6.2.6-v19
     container_name: redis
     restart: always
     environment:
-      REDIS_ARGS: "--requirepass irctcpass"
+      REDIS_ARGS: "--requirepass scalerailpass"
     ports:
       - "6379:6379"
       - "8001:8001"
     volumes:
       - redis_data:/data
     networks:
-      - irctc-network
+      - scalerail-network
+
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: zookeeper
@@ -55,7 +56,7 @@ services:
       - zookeeper_data:/var/lib/zookeeper/data
       - zookeeper_logs:/var/lib/zookeeper/log
     networks:
-      - irctc-network
+      - scalerail-network
 
   kafka:
     image: confluentinc/cp-kafka:7.5.0
@@ -79,7 +80,7 @@ services:
     volumes:
       - kafka_data:/var/lib/kafka/data
     networks:
-      - irctc-network
+      - scalerail-network
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
@@ -90,11 +91,11 @@ services:
     ports:
       - "8080:8080"
     environment:
-      KAFKA_CLUSTERS_0_NAME: irctc-cluster
+      KAFKA_CLUSTERS_0_NAME: scalerail-cluster
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
       KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
     networks:
-      - irctc-network
+      - scalerail-network
   
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
@@ -109,7 +110,7 @@ services:
     volumes:
       - es_data:/usr/share/elasticsearch/data
     networks:
-      - irctc-network
+      - scalerail-network
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.12.0
@@ -122,7 +123,8 @@ services:
     environment:
       ELASTICSEARCH_HOSTS: http://elasticsearch:9200
     networks:
-      - irctc-network
+      - scalerail-network
+
 volumes:
   postgres_data:
   redis_data:
@@ -132,5 +134,5 @@ volumes:
   es_data:
 
 networks:
-  irctc-network:
+  scalerail-network:
     driver: bridge

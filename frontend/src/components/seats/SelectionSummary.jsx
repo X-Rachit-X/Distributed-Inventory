@@ -15,16 +15,26 @@ export default function SelectionSummary() {
   if (count === 0) return null;
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-white border-t shadow-lg z-30">
-      <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-        <div className="text-sm">
-          <span className="font-semibold">{count}</span> seat{count !== 1 ? 's' : ''} selected
-          <span className="text-gray-400 ml-1">(max {MAX_SEATS_PER_BOOKING})</span>
-          <span className="ml-4 font-bold text-primary-900 text-lg">{formatCurrency(totalPrice)}</span>
+    <div className="fixed bottom-0 left-0 right-0 z-30">
+      {/* Blur gradient backdrop */}
+      <div className="bg-white/80 backdrop-blur-md border-t border-surface-200 shadow-[0_-4px_24px_rgba(0,0,0,0.08)]">
+        <div className="section-container py-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-primary-100 text-primary-700 font-display font-bold text-lg">
+              {count}
+            </div>
+            <div>
+              <p className="text-sm font-medium text-surface-700">
+                {count} seat{count !== 1 ? 's' : ''} selected
+                <span className="text-surface-400 ml-1.5 font-normal">(max {MAX_SEATS_PER_BOOKING})</span>
+              </p>
+              <p className="font-display font-bold text-xl text-primary-700">{formatCurrency(totalPrice)}</p>
+            </div>
+          </div>
+          <Button onClick={() => navigate('/booking')} className="shrink-0">
+            Proceed to Booking →
+          </Button>
         </div>
-        <Button onClick={() => navigate('/booking')}>
-          Proceed to Booking
-        </Button>
       </div>
     </div>
   );

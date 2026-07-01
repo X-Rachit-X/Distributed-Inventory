@@ -1,17 +1,39 @@
 import Spinner from './Spinner';
 
-const variants = {
-  primary: 'btn-primary',
+const VARIANTS = {
+  primary:   'btn-primary',
   secondary: 'btn-secondary',
-  danger: 'btn-danger',
-  accent: 'btn-accent',
+  danger:    'btn-danger',
+  accent:    'btn-accent',
+  ghost:     'btn-ghost',
 };
 
-export default function Button({ children, variant = 'primary', loading, className = '', ...props }) {
+export default function Button({
+  children,
+  variant = 'primary',
+  loading = false,
+  className = '',
+  type = 'button',
+  disabled,
+  onClick,
+  id,
+}) {
+  const base = VARIANTS[variant] || VARIANTS.primary;
+
   return (
-    <button className={`${variants[variant]} ${className}`} disabled={loading || props.disabled} {...props}>
-      {loading && <Spinner size="sm" />}
-      {children}
+    <button
+      id={id}
+      type={type}
+      onClick={onClick}
+      disabled={disabled || loading}
+      className={`${base} ${className}`}
+    >
+      {loading ? (
+        <>
+          <Spinner size="sm" light />
+          <span>Loading…</span>
+        </>
+      ) : children}
     </button>
   );
 }
