@@ -1,0 +1,11 @@
+{
+  "name": "@tessera/bench",
+  "version": "2.0.0",
+  "private": true,
+  "main": "src/seed.js",
+  "type": "commonjs",
+  "dependencies": {
+    "@tessera/shared": "2.0.0",
+    "pg": "^8.19.0"
+  }
+}

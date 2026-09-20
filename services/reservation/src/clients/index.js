@@ -74,6 +74,77 @@ class HttpInventoryClient {
      release(req) {
           return this.#call('/internal/release', req, req.idempotencyKey);
      }
+     cancelBooking(req) {
+          return this.#call('/internal/cancel-booking', req, req.idempotencyKey);
+     }
+}
+
+/**
+ * Payment client.
+ *
+ * Separate from the inventory client for one reason that matters: a TIMEOUT
+ * HERE IS NOT A FAILURE. The charge may have gone through. The error is marked
+ * `indeterminate` so the saga records UNKNOWN and asks the provider, rather
+ * than assuming the worst and releasing a seat the customer paid for.
+ */
+class HttpPaymentClient {
+     constructor({ baseUrl, internalToken, timeoutMs = 30_000, logger }) {
+          this.baseUrl = baseUrl.replace(/\/$/, '');
+          this.internalToken = internalToken;
+          this.timeoutMs = timeoutMs;
+          this.logger = logger;
+     }
+
+     async #call(path, body, method = 'POST') {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+          try {
+               const res = await fetch(`${this.baseUrl}${path}`, {
+                    method,
+                    signal: controller.signal,
+                    headers: {
+                         'content-type': 'application/json',
+                         'x-internal-token': this.internalToken,
+                    },
+                    body: method === 'GET' ? undefined : JSON.stringify(body),
+               });
+               const json = await res.json().catch(() => null);
+               if (!res.ok) {
+                    const err = toError(res.status, json);
+                    // A 5xx from the payment service may mean the provider was
+                    // reached and we lost the answer. Treat it as unknown.
+                    if (res.status >= 500) err.indeterminate = true;
+                    throw err;
+               }
+               return json?.data ?? json;
+          } catch (err) {
+               if (err.name === 'AbortError') {
+                    const timeout = new ServiceUnavailableError(
+                         `payment service did not answer within ${this.timeoutMs}ms`
+                    );
+                    // The flag the saga keys on to record UNKNOWN.
+                    timeout.indeterminate = true;
+                    timeout.code = 'PROVIDER_TIMEOUT';
+                    throw timeout;
+               }
+               throw err;
+          } finally {
+               clearTimeout(timer);
+          }
+     }
+
+     charge(req) {
+          return this.#call('/internal/charge', req);
+     }
+     resolveUnknown(paymentId) {
+          return this.#call(`/internal/payments/${paymentId}/resolve`, {});
+     }
+     refund(req) {
+          return this.#call(`/internal/payments/${req.paymentId}/refund`, req);
+     }
+     get(paymentId) {
+          return this.#call(`/internal/payments/${paymentId}`, null, 'GET');
+     }
 }
 
 /**
@@ -110,11 +181,20 @@ class InProcessInventoryClient {
                this.engine.release(client, { holdId: req.holdId, reason: req.reason })
           );
      }
+
+     cancelBooking(req) {
+          return this.pool.withTransaction((client) =>
+               this.engine.cancelBooking(client, { bookingId: req.bookingId, reason: req.reason })
+          );
+     }
 }
 
 class InProcessPaymentClient {
      constructor({ service }) {
           this.service = service;
+     }
+     cancelBooking() {
+          return Promise.resolve({ ok: true });
      }
      charge(req) {
           return this.service.charge(req);
@@ -127,4 +207,10 @@ class InProcessPaymentClient {
      }
 }
 
-module.exports = { HttpInventoryClient, InProcessInventoryClient, InProcessPaymentClient, toError };
+module.exports = {
+     HttpInventoryClient,
+     HttpPaymentClient,
+     InProcessInventoryClient,
+     InProcessPaymentClient,
+     toError,
+};

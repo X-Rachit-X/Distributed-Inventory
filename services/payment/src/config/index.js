@@ -1,19 +1,34 @@
-const config = {
-     PORT: Number(process.env.PORT) || 4006,
-     SERVICE_NAME: require('../../package.json').name,
-     NODE_ENV: process.env.NODE_ENV || 'development',
-     LOG_LEVEL: process.env.LOG_LEVEL || 'info',
-     KAFKA_BROKER: process.env.KAFKA_BROKER,
-     KAFKA_CLIENT_ID: process.env.KAFKA_CLIENT_ID || 'payment-service',
-     DATABASE_URL: process.env.DATABASE_URL,
-     ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
-     INTERNAL_SERVICE_KEY: process.env.INTERNAL_SERVICE_KEY,
+'use strict';
 
-     // Payment gateway
-     PAYMENT_GATEWAY: process.env.PAYMENT_GATEWAY || 'razorpay',
-     RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID,
-     RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET,
-     RAZORPAY_WEBHOOK_SECRET: process.env.RAZORPAY_WEBHOOK_SECRET,
+const num = (name, fallback) => {
+     const raw = process.env[name];
+     if (raw === undefined || raw === '') return fallback;
+     const parsed = Number(raw);
+     if (!Number.isFinite(parsed)) throw new Error(`${name} must be a number, got "${raw}"`);
+     return parsed;
+};
+
+const isProduction = process.env.NODE_ENV === 'production';
+
+const config = {
+     NODE_ENV: process.env.NODE_ENV || 'development',
+     PORT: num('PAYMENT_PORT', 4003),
+     DATABASE_URL: process.env.PAYMENT_DATABASE_URL || 'postgresql://tessera:tessera@localhost:5432/payment',
+     DB_POOL_MAX: num('DB_POOL_MAX', 10),
+     KAFKA_BROKERS: process.env.KAFKA_BROKERS || '',
+     INTERNAL_TOKEN: process.env.INTERNAL_TOKEN || 'dev-internal-token',
+     WEBHOOK_SECRET: process.env.PAYMENT_WEBHOOK_SECRET || 'dev-webhook-secret',
+     PROVIDER_MODE: process.env.PAYMENT_PROVIDER_MODE || 'ok',
+     RESOLVE_INTERVAL_MS: num('PAYMENT_RESOLVE_INTERVAL_MS', 2000),
+};
+
+if (isProduction) {
+     if (config.INTERNAL_TOKEN === 'dev-internal-token') {
+          throw new Error('INTERNAL_TOKEN must be set to a real secret in production');
+     }
+     if (config.WEBHOOK_SECRET === 'dev-webhook-secret') {
+          throw new Error('PAYMENT_WEBHOOK_SECRET must be set to a real secret in production');
+     }
 }
 
-module.exports = { config };
+module.exports = config;

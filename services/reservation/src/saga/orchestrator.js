@@ -106,6 +106,22 @@ class SagaOrchestrator {
           return claimed.length;
      }
 
+     /**
+      * Release this worker's leases on shutdown.
+      *
+      * Without it, a rolling deploy parks every in-flight saga for the full
+      * lease duration, which users experience as bookings that stall for a
+      * minute on every release.
+      */
+     async releaseLeases() {
+          const { rowCount } = await this.pool.query(
+               `UPDATE sagas SET lease_owner = NULL, lease_until = NULL WHERE lease_owner = $1`,
+               [this.workerId]
+          );
+          if (rowCount > 0) this.logger.info('released saga leases', { count: rowCount });
+          return rowCount;
+     }
+
      async #claim(batchSize) {
           const { rows } = await this.pool.query(
                `WITH due AS (
@@ -163,7 +179,12 @@ class SagaOrchestrator {
                case 'RELEASED':
                     return this.#transition(saga, 'COMPENSATED', 'OK', 'compensation complete');
                case 'HOLD_FAILED':
-                    return this.#transition(saga, 'COMPENSATED', 'OK', 'nothing to compensate');
+                    // There is no inventory to release, but the RESERVATION
+                    // still has to be settled. Without this the saga reaches a
+                    // terminal state while the reservation sits in PENDING, and
+                    // the customer polls "in progress" forever on a booking
+                    // that definitively failed. Found by the end-to-end run.
+                    return this.#settleAndCompensate(saga, 'inventory was no longer available');
                case 'REFUND_PENDING':
                     return this.#refund(saga, started);
                default:
@@ -216,6 +237,11 @@ class SagaOrchestrator {
                if (err.status === 409) {
                     // Inventory is gone. A legitimate business outcome, not a
                     // fault: fail fast rather than retrying into a wall.
+                    await this.pool.query(
+                         `UPDATE reservations SET failure_reason = $2
+                           WHERE id = $1 AND failure_reason IS NULL`,
+                         [saga.reservation_id, err.message]
+                    );
                     await this.#fail(saga, 'HOLD_FAILED', err.message);
                     return;
                }
@@ -513,6 +539,26 @@ class SagaOrchestrator {
 
      async #fail(saga, state, reason) {
           await this.#transition(saga, state, 'FAILED', reason, { runInMs: 0 });
+     }
+
+     /**
+      * Settle a reservation that failed before anything was held.
+      *
+      * The saga and the reservation are separate aggregates, so a saga reaching
+      * a terminal state is not by itself visible to the customer. Both must
+      * move together or the API reports progress that will never happen.
+      */
+     async #settleAndCompensate(saga, reason) {
+          await this.pool.withTransaction(async (client) => {
+               await client.query(
+                    `UPDATE reservations
+                        SET state = 'FAILED', failure_reason = $2
+                      WHERE id = $1 AND state NOT IN ('CONFIRMED','CANCELLED','FAILED','EXPIRED')`,
+                    [saga.reservation_id, reason]
+               );
+               await this.#transitionIn(client, saga, 'COMPENSATED', 'OK', reason);
+          });
+          metrics.sagaCompensations.inc({ reason: 'hold_failed' });
      }
 
      async #recordFailure(saga, err) {
