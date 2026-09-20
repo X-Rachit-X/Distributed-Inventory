@@ -348,6 +348,10 @@ app.get(
      proxy(config.INVENTORY_URL, (req) => `/v1/events/${req.params.eventId}/availability${qs(req)}`)
 );
 app.get(
+     '/api/events/:eventId/span-points',
+     proxy(config.INVENTORY_URL, (req) => `/v1/events/${req.params.eventId}/span-points`)
+);
+app.get(
      '/api/events/:eventId/resources',
      proxy(config.INVENTORY_URL, (req) => `/v1/events/${req.params.eventId}/resources${qs(req)}`)
 );
