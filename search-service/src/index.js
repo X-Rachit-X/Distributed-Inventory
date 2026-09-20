@@ -10,7 +10,6 @@ const { initIndices, recreateIndices } = require('./config/elasticsearch');
 const { corsMiddleware } = require('./middlewares/cors.middleware');
 const errorHandler = require('./middlewares/error.middleware');
 const { reqLogger } = require('./middlewares/req.middleware');
-
 const searchRoutes = require('./routes/search.route');
 const searchConsumer = require('./kafka/consumer/search.consumer');
 const { disconnectAll } = require('./config/kafka');
