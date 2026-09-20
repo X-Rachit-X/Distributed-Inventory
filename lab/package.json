@@ -1,0 +1,16 @@
+{
+  "name": "@tessera/lab",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Contention Lab and Chaos Lab — experimental verification of concurrency strategies and failure recovery",
+  "main": "src/runner.js",
+  "type": "commonjs",
+  "bin": {
+    "tessera-lab": "src/cli/lab.js"
+  },
+  "dependencies": {
+    "@tessera/shared": "2.0.0",
+    "ioredis": "^5.9.2",
+    "pg": "^8.19.0"
+  }
+}

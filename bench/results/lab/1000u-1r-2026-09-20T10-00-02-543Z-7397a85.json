@@ -1,0 +1,488 @@
+{
+  "scenario": "1000u-1r",
+  "seed": 42,
+  "generatedAt": "2026-09-20T10:00:02.543Z",
+  "environment": {
+    "gitCommit": "7397a85",
+    "gitDirty": true,
+    "node": "v22.13.1",
+    "platform": "win32 10.0.26200",
+    "cpus": 16,
+    "cpuModel": "AMD Ryzen 9 6900HX with Radeon Graphics        ",
+    "totalMemGb": 15.3,
+    "note": "single-machine run; Docker Desktop VM; not a production capacity measurement"
+  },
+  "results": [
+    {
+      "runId": "5f0d78cd-3925-4474-bac6-b54af9bf4d48",
+      "scenario": "1000u-1r",
+      "strategy": "A",
+      "strategyName": "naive-read-check-write",
+      "expectedSafe": false,
+      "seed": 42,
+      "concurrency": 64,
+      "wallMs": 993,
+      "attempts": 1000,
+      "successes": 64,
+      "conflicts": 936,
+      "errors": 0,
+      "timeouts": 0,
+      "shed": 0,
+      "totalRetries": 0,
+      "throughputPerSec": 1007,
+      "latency": {
+        "p50": 13.55,
+        "p95": 156.83,
+        "p99": 622.7,
+        "max": 674.07,
+        "mean": 36.84
+      },
+      "distinctClaims": 1,
+      "totalRows": 64,
+      "capacity": 1,
+      "oversells": 63,
+      "overlaps": 2016,
+      "contention": {
+        "sampleCount": 9,
+        "topWaits": [
+          {
+            "event": "Lock:transactionid",
+            "samples": 190,
+            "share": 0.848
+          },
+          {
+            "event": "Running:-",
+            "samples": 16,
+            "share": 0.071
+          },
+          {
+            "event": "Lock:tuple",
+            "samples": 12,
+            "share": 0.054
+          },
+          {
+            "event": "Client:ClientRead",
+            "samples": 6,
+            "share": 0.027
+          }
+        ],
+        "deadlocksStart": {
+          "deadlocks": "0",
+          "xact_rollback": "614"
+        }
+      },
+      "environment": {
+        "gitCommit": "7397a85",
+        "gitDirty": true,
+        "node": "v22.13.1",
+        "platform": "win32 10.0.26200",
+        "cpus": 16,
+        "cpuModel": "AMD Ryzen 9 6900HX with Radeon Graphics        ",
+        "totalMemGb": 15.3,
+        "note": "single-machine run; Docker Desktop VM; not a production capacity measurement"
+      },
+      "valid": false,
+      "verdict": "OVERSOLD AS PREDICTED — 64 customers hold the same resource-span (63 more than capacity allows), 2016 overlapping pair(s); this is why the constraint exists"
+    },
+    {
+      "runId": "bed77c56-a16b-451b-b820-06451a6392f4",
+      "scenario": "1000u-1r",
+      "strategy": "B",
+      "strategyName": "pessimistic-row-lock",
+      "expectedSafe": true,
+      "seed": 42,
+      "concurrency": 64,
+      "wallMs": 1059,
+      "attempts": 1000,
+      "successes": 1,
+      "conflicts": 999,
+      "errors": 0,
+      "timeouts": 0,
+      "shed": 0,
+      "totalRetries": 0,
+      "throughputPerSec": 944.3,
+      "latency": {
+        "p50": 64.04,
+        "p95": 76.12,
+        "p99": 96.34,
+        "max": 113.62,
+        "mean": 64.31
+      },
+      "distinctClaims": 1,
+      "totalRows": 1,
+      "capacity": 1,
+      "oversells": 0,
+      "overlaps": 0,
+      "contention": {
+        "sampleCount": 10,
+        "topWaits": [
+          {
+            "event": "Lock:tuple",
+            "samples": 602,
+            "share": 0.966
+          },
+          {
+            "event": "Lock:transactionid",
+            "samples": 10,
+            "share": 0.016
+          },
+          {
+            "event": "Running:-",
+            "samples": 10,
+            "share": 0.016
+          },
+          {
+            "event": "Client:ClientRead",
+            "samples": 1,
+            "share": 0.002
+          }
+        ],
+        "deadlocksStart": {
+          "deadlocks": "0",
+          "xact_rollback": "614"
+        }
+      },
+      "environment": {
+        "gitCommit": "7397a85",
+        "gitDirty": true,
+        "node": "v22.13.1",
+        "platform": "win32 10.0.26200",
+        "cpus": 16,
+        "cpuModel": "AMD Ryzen 9 6900HX with Radeon Graphics        ",
+        "totalMemGb": 15.3,
+        "note": "single-machine run; Docker Desktop VM; not a production capacity measurement"
+      },
+      "valid": true,
+      "verdict": "CORRECT — no duplicate or overlapping claims"
+    },
+    {
+      "runId": "dcba178f-02d7-4600-8285-b6db3a26e79c",
+      "scenario": "1000u-1r",
+      "strategy": "C",
+      "strategyName": "skip-locked",
+      "expectedSafe": true,
+      "seed": 42,
+      "concurrency": 64,
+      "wallMs": 471,
+      "attempts": 1000,
+      "successes": 1,
+      "conflicts": 999,
+      "errors": 0,
+      "timeouts": 0,
+      "shed": 0,
+      "totalRetries": 0,
+      "throughputPerSec": 2123.1,
+      "latency": {
+        "p50": 28.16,
+        "p95": 39.45,
+        "p99": 56.02,
+        "max": 64.74,
+        "mean": 28.94
+      },
+      "distinctClaims": 1,
+      "totalRows": 1,
+      "capacity": 1,
+      "oversells": 0,
+      "overlaps": 0,
+      "contention": {
+        "sampleCount": 4,
+        "topWaits": [
+          {
+            "event": "Running:-",
+            "samples": 5,
+            "share": 0.556
+          },
+          {
+            "event": "Client:ClientRead",
+            "samples": 4,
+            "share": 0.444
+          }
+        ],
+        "deadlocksStart": {
+          "deadlocks": "0",
+          "xact_rollback": "2383"
+        }
+      },
+      "environment": {
+        "gitCommit": "7397a85",
+        "gitDirty": true,
+        "node": "v22.13.1",
+        "platform": "win32 10.0.26200",
+        "cpus": 16,
+        "cpuModel": "AMD Ryzen 9 6900HX with Radeon Graphics        ",
+        "totalMemGb": 15.3,
+        "note": "single-machine run; Docker Desktop VM; not a production capacity measurement"
+      },
+      "valid": true,
+      "verdict": "CORRECT — no duplicate or overlapping claims"
+    },
+    {
+      "runId": "a6b43ce8-8fa0-4b1e-8e8a-994509aa0a94",
+      "scenario": "1000u-1r",
+      "strategy": "D",
+      "strategyName": "optimistic-cas",
+      "expectedSafe": true,
+      "seed": 42,
+      "concurrency": 64,
+      "wallMs": 497,
+      "attempts": 1000,
+      "successes": 1,
+      "conflicts": 999,
+      "errors": 0,
+      "timeouts": 0,
+      "shed": 0,
+      "totalRetries": 63,
+      "throughputPerSec": 2012.1,
+      "latency": {
+        "p50": 22.38,
+        "p95": 58.3,
+        "p99": 281.01,
+        "max": 389.71,
+        "mean": 30.78
+      },
+      "distinctClaims": 1,
+      "totalRows": 1,
+      "capacity": 1,
+      "oversells": 0,
+      "overlaps": 0,
+      "contention": {
+        "sampleCount": 4,
+        "topWaits": [
+          {
+            "event": "Lock:tuple",
+            "samples": 50,
+            "share": 0.833
+          },
+          {
+            "event": "Running:-",
+            "samples": 5,
+            "share": 0.083
+          },
+          {
+            "event": "Lock:transactionid",
+            "samples": 3,
+            "share": 0.05
+          },
+          {
+            "event": "Client:ClientRead",
+            "samples": 2,
+            "share": 0.033
+          }
+        ],
+        "deadlocksStart": {
+          "deadlocks": "0",
+          "xact_rollback": "2646"
+        }
+      },
+      "environment": {
+        "gitCommit": "7397a85",
+        "gitDirty": true,
+        "node": "v22.13.1",
+        "platform": "win32 10.0.26200",
+        "cpus": 16,
+        "cpuModel": "AMD Ryzen 9 6900HX with Radeon Graphics        ",
+        "totalMemGb": 15.3,
+        "note": "single-machine run; Docker Desktop VM; not a production capacity measurement"
+      },
+      "valid": true,
+      "verdict": "CORRECT — no duplicate or overlapping claims"
+    },
+    {
+      "runId": "b15d4df2-ed5b-4202-8e17-d9066ffc0909",
+      "scenario": "1000u-1r",
+      "strategy": "E",
+      "strategyName": "redis-lock-plus-constraint",
+      "expectedSafe": true,
+      "seed": 42,
+      "concurrency": 64,
+      "wallMs": 88,
+      "attempts": 1000,
+      "successes": 1,
+      "conflicts": 999,
+      "errors": 0,
+      "timeouts": 0,
+      "shed": 0,
+      "totalRetries": 0,
+      "throughputPerSec": 11363.6,
+      "latency": {
+        "p50": 3.63,
+        "p95": 10.18,
+        "p99": 10.64,
+        "max": 46.41,
+        "mean": 4.43
+      },
+      "distinctClaims": 1,
+      "totalRows": 1,
+      "capacity": 1,
+      "oversells": 0,
+      "overlaps": 0,
+      "contention": {
+        "sampleCount": 0,
+        "topWaits": [],
+        "deadlocksStart": {
+          "deadlocks": "0",
+          "xact_rollback": "3605"
+        }
+      },
+      "environment": {
+        "gitCommit": "7397a85",
+        "gitDirty": true,
+        "node": "v22.13.1",
+        "platform": "win32 10.0.26200",
+        "cpus": 16,
+        "cpuModel": "AMD Ryzen 9 6900HX with Radeon Graphics        ",
+        "totalMemGb": 15.3,
+        "note": "single-machine run; Docker Desktop VM; not a production capacity measurement"
+      },
+      "valid": true,
+      "verdict": "CORRECT — no duplicate or overlapping claims"
+    },
+    {
+      "runId": "8be36501-a312-41c5-8233-4f5921d74214",
+      "scenario": "1000u-1r",
+      "strategy": "F",
+      "strategyName": "postgres-native-exclusion",
+      "expectedSafe": true,
+      "seed": 42,
+      "concurrency": 64,
+      "wallMs": 104173,
+      "attempts": 1000,
+      "successes": 1,
+      "conflicts": 308,
+      "errors": 609,
+      "timeouts": 82,
+      "shed": 0,
+      "totalRetries": 0,
+      "throughputPerSec": 9.6,
+      "latency": {
+        "p50": 814.46,
+        "p95": 30002.25,
+        "p99": 30008.4,
+        "max": 30023.42,
+        "mean": 6605.97
+      },
+      "distinctClaims": 1,
+      "totalRows": 1,
+      "capacity": 1,
+      "oversells": 0,
+      "overlaps": 0,
+      "contention": {
+        "sampleCount": 962,
+        "topWaits": [
+          {
+            "event": "Lock:transactionid",
+            "samples": 60510,
+            "share": 0.977
+          },
+          {
+            "event": "Running:-",
+            "samples": 1048,
+            "share": 0.017
+          },
+          {
+            "event": "LWLock:LockManager",
+            "samples": 286,
+            "share": 0.005
+          },
+          {
+            "event": "LWLock:BufferContent",
+            "samples": 49,
+            "share": 0.001
+          },
+          {
+            "event": "LWLock:WALInsert",
+            "samples": 6,
+            "share": 0
+          },
+          {
+            "event": "Client:ClientRead",
+            "samples": 3,
+            "share": 0
+          },
+          {
+            "event": "IO:WALSync",
+            "samples": 1,
+            "share": 0
+          }
+        ],
+        "deadlocksStart": {
+          "deadlocks": "0",
+          "xact_rollback": "3647"
+        }
+      },
+      "environment": {
+        "gitCommit": "7397a85",
+        "gitDirty": true,
+        "node": "v22.13.1",
+        "platform": "win32 10.0.26200",
+        "cpus": 16,
+        "cpuModel": "AMD Ryzen 9 6900HX with Radeon Graphics        ",
+        "totalMemGb": 15.3,
+        "note": "single-machine run; Docker Desktop VM; not a production capacity measurement"
+      },
+      "valid": true,
+      "verdict": "CORRECT — no duplicate or overlapping claims"
+    },
+    {
+      "runId": "079e2baf-4885-4398-a571-08f5a2933ec9",
+      "scenario": "1000u-1r",
+      "strategy": "H",
+      "strategyName": "admission-controlled",
+      "expectedSafe": true,
+      "seed": 42,
+      "concurrency": 64,
+      "wallMs": 6067,
+      "attempts": 1000,
+      "successes": 1,
+      "conflicts": 968,
+      "errors": 31,
+      "timeouts": 0,
+      "shed": 968,
+      "totalRetries": 0,
+      "throughputPerSec": 164.8,
+      "latency": {
+        "p50": 0.04,
+        "p95": 1.33,
+        "p99": 4232.21,
+        "max": 6044.15,
+        "mean": 100.9
+      },
+      "distinctClaims": 1,
+      "totalRows": 1,
+      "capacity": 1,
+      "oversells": 0,
+      "overlaps": 0,
+      "contention": {
+        "sampleCount": 55,
+        "topWaits": [
+          {
+            "event": "Lock:transactionid",
+            "samples": 912,
+            "share": 0.942
+          },
+          {
+            "event": "Running:-",
+            "samples": 56,
+            "share": 0.058
+          }
+        ],
+        "deadlocksStart": {
+          "deadlocks": "608",
+          "xact_rollback": "5609"
+        }
+      },
+      "environment": {
+        "gitCommit": "7397a85",
+        "gitDirty": true,
+        "node": "v22.13.1",
+        "platform": "win32 10.0.26200",
+        "cpus": 16,
+        "cpuModel": "AMD Ryzen 9 6900HX with Radeon Graphics        ",
+        "totalMemGb": 15.3,
+        "note": "single-machine run; Docker Desktop VM; not a production capacity measurement"
+      },
+      "valid": true,
+      "verdict": "CORRECT — no duplicate or overlapping claims"
+    }
+  ]
+}
