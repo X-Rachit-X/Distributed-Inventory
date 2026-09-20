@@ -1,0 +1,264 @@
+name: tessera
+
+# =============================================================================
+# Tessera local stack.
+#
+# Profiles:
+#   core  — datastores, broker, application services
+#   obs   — Prometheus, Grafana, Jaeger, OpenTelemetry collector
+#   lab   — Toxiproxy and the contention/chaos lab
+#
+# Everything has a healthcheck and every dependant waits for it. Without that,
+# a service racing a half-initialised Kafka fails in ways that look like
+# application bugs and waste an afternoon.
+# =============================================================================
+
+x-postgres-env: &postgres-env
+  POSTGRES_USER: tessera
+  POSTGRES_PASSWORD: tessera
+  POSTGRES_DB: postgres
+
+services:
+  # ───────────────────────────────────────────────────────────────────────────
+  # PostgreSQL — the authority for every correctness decision in the system.
+  #
+  # Settings are tuned to make contention VISIBLE rather than comfortable:
+  # statement statistics on, lock waits logged, deadlocks reported quickly. A
+  # benchmark that cannot see lock waits cannot explain its own p99.
+  # ───────────────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: tessera-postgres
+    restart: unless-stopped
+    environment: *postgres-env
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - max_connections=200
+      - -c
+      - log_lock_waits=on
+      - -c
+      - deadlock_timeout=200ms
+      - -c
+      - log_min_duration_statement=500
+      - -c
+      - track_io_timing=on
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tessera -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [tessera]
+    profiles: [core]
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Redis — acceleration only. Rate limiting, the waiting-room queue, and the
+  # availability read cache. Nothing here is a source of truth; the system is
+  # designed to stay correct (degraded, but correct) with Redis stopped.
+  #
+  # AOF is on anyway: losing the waiting-room queue on restart would be a bad
+  # user experience even though it is not a correctness event.
+  # ───────────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: tessera-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [tessera]
+    profiles: [core]
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Kafka in KRaft mode — no ZooKeeper. One less stateful system to run, and
+  # the configuration a new Kafka deployment would actually use today.
+  #
+  # Topic auto-creation is OFF. Auto-created topics get one partition, which
+  # silently caps consumer parallelism at one and makes a partitioning strategy
+  # impossible to reason about. Topics are created explicitly by kafka-init.
+  # ───────────────────────────────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.7.1
+    container_name: tessera-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENERS: PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      CLUSTER_ID: tessera-local-cluster-0
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:29092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+    networks: [tessera]
+    profiles: [core]
+
+  # Creates every topic with an explicit partition count. Idempotent: safe to
+  # re-run, exits 0 when topics already exist.
+  kafka-init:
+    image: confluentinc/cp-kafka:7.7.1
+    container_name: tessera-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./init/kafka/create-topics.sh:/create-topics.sh:ro
+    command: ["bash", "/create-topics.sh"]
+    networks: [tessera]
+    profiles: [core]
+    restart: on-failure
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: tessera-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: tessera
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      DYNAMIC_CONFIG_ENABLED: "true"
+    networks: [tessera]
+    profiles: [obs]
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Elasticsearch — discovery only. Search results are explicitly NOT
+  # authoritative inventory; they carry an `as_of` timestamp and the reserve
+  # path re-validates everything against PostgreSQL.
+  # ───────────────────────────────────────────────────────────────────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    container_name: tessera-elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks: [tessera]
+    profiles: [core]
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Observability
+  # ───────────────────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: tessera-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    networks: [tessera]
+    profiles: [obs]
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: tessera-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on: [prometheus]
+    networks: [tessera]
+    profiles: [obs]
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    container_name: tessera-jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686"   # UI
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    networks: [tessera]
+    profiles: [obs]
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Chaos tooling. Toxiproxy sits between services and their dependencies so a
+  # test can add latency, cut bandwidth or sever a connection without touching
+  # application code or the host network.
+  # ───────────────────────────────────────────────────────────────────────────
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.11.0
+    container_name: tessera-toxiproxy
+    restart: unless-stopped
+    ports:
+      - "8474:8474"     # control API
+      - "15432:15432"   # proxied postgres
+      - "16379:16379"   # proxied redis
+      - "19092:19092"   # proxied kafka
+    networks: [tessera]
+    profiles: [lab]
+
+volumes:
+  postgres_data:
+  redis_data:
+  kafka_data:
+  es_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  tessera:
+    driver: bridge
