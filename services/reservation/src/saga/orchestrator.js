@@ -196,10 +196,13 @@ class SagaOrchestrator {
      // ── Forward steps ────────────────────────────────────────────────────
 
      async #beginHold(saga, started) {
-          await this.#transition(saga, 'HOLD_PENDING', 'OK', 'requesting hold', {
+          const claimed = await this.#transition(saga, 'HOLD_PENDING', 'OK', 'requesting hold', {
                deadlineMs: STEP_POLICY.HOLD_PENDING.timeoutMs,
                runInMs: 0,
+               // Hold the claim across the call this marks the start of.
+               keepLease: true,
           });
+          if (!claimed) return;
 
           const ctx = saga.context;
           try {
@@ -258,10 +261,13 @@ class SagaOrchestrator {
      async #beginPayment(saga, started) {
           const ctx = saga.context;
 
-          await this.#transition(saga, 'PAYMENT_PENDING', 'OK', 'charging', {
+          const claimed = await this.#transition(saga, 'PAYMENT_PENDING', 'OK', 'charging', {
                deadlineMs: STEP_POLICY.PAYMENT_PENDING.timeoutMs,
                runInMs: 0,
+               // Hold the claim across the call this marks the start of.
+               keepLease: true,
           });
+          if (!claimed) return;
 
           const idempotencyKey = `saga:${saga.id}:payment`;
           let result;
@@ -366,10 +372,13 @@ class SagaOrchestrator {
      async #beginConfirm(saga, started) {
           const ctx = saga.context;
 
-          await this.#transition(saga, 'CONFIRM_PENDING', 'OK', 'confirming inventory', {
+          const claimed = await this.#transition(saga, 'CONFIRM_PENDING', 'OK', 'confirming inventory', {
                deadlineMs: STEP_POLICY.CONFIRM_PENDING.timeoutMs,
                runInMs: 0,
+               // Hold the claim across the call this marks the start of.
+               keepLease: true,
           });
+          if (!claimed) return;
 
           const bookingId = ctx.bookingId ?? saga.reservation_id;
 
@@ -604,29 +613,65 @@ class SagaOrchestrator {
           );
      }
 
+     /**
+      * Apply one transition as a compare-and-swap.
+      *
+      * Two properties, both learned by running two replicas at once.
+      *
+      * 1. GUARDED ON THE EXPECTED STATE. The `saga` object is a snapshot taken
+      *    when the row was claimed. If another worker has since moved it, a
+      *    blind `UPDATE ... SET state` would attempt a transition from a state
+      *    that is no longer current — which the database trigger correctly
+      *    rejects with "illegal saga transition". Putting the expected state in
+      *    the WHERE clause turns that into a no-op the caller can detect,
+      *    rather than an exception.
+      *
+      * 2. THE LEASE SURVIVES AN INTRA-STEP TRANSITION. Marking a step
+      *    in-progress (CREATED -> HOLD_PENDING) happens BEFORE the slow call it
+      *    describes. Clearing the lease there left the saga claimable for the
+      *    entire duration of that call, so a second worker picked it up and ran
+      *    the same step concurrently. `keepLease` holds the claim until the
+      *    step finishes; only a terminal-for-now transition releases it.
+      *
+      * @returns {Promise<boolean>} false when another worker had already moved it
+      */
      async #transitionIn(client, saga, toState, outcome, detail, opts = {}) {
           const deadline = opts.deadlineMs ? `now() + interval '${Number(opts.deadlineMs)} milliseconds'` : 'NULL';
           const runIn = opts.runInMs ?? 0;
 
-          const params = [saga.id, toState, String(runIn)];
+          // Keeping the lease means this worker is still mid-step; releasing it
+          // means the step is done and the saga is open to any worker.
+          const leaseClause = opts.keepLease
+               ? ''
+               : ', lease_owner = NULL, lease_until = NULL';
+
+          const params = [saga.id, toState, String(runIn), saga.state];
           let contextClause = '';
           if (opts.context) {
-               contextClause = ', context = $4';
+               contextClause = ', context = $5';
                params.push(JSON.stringify(opts.context));
           }
 
-          await client.query(
+          const { rowCount } = await client.query(
                `UPDATE sagas
                    SET state = $2,
                        next_run_at = now() + ($3 || ' milliseconds')::interval,
                        step_deadline_at = ${deadline},
-                       lease_owner = NULL,
-                       lease_until = NULL,
                        attempts = CASE WHEN state <> $2 THEN 0 ELSE attempts END
+                       ${leaseClause}
                        ${contextClause}
-                 WHERE id = $1`,
+                 WHERE id = $1 AND state = $4`,
                params
           );
+
+          if (rowCount === 0) {
+               this.logger.warn('saga transition skipped; another worker moved it first', {
+                    sagaId: saga.id,
+                    expectedFrom: saga.state,
+                    attemptedTo: toState,
+               });
+               return false;
+          }
 
           await client.query(
                `INSERT INTO saga_steps (saga_id, from_state, to_state, attempt, outcome, detail)
@@ -635,6 +680,11 @@ class SagaOrchestrator {
           );
 
           metrics.sagaTransitions.inc({ from: saga.state, to: toState });
+
+          // Keep the snapshot in step with the database, so a second transition
+          // within the same step uses the correct `from` state.
+          saga.state = toState;
+          return true;
      }
 
      #observe(saga, toState, started) {

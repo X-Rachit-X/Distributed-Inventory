@@ -174,6 +174,68 @@ app.post(
 // Public read API — discovery data, explicitly not authoritative
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * Browse events.
+ *
+ * The availability figure here is a live count rather than a cached one,
+ * because the list is small and the query is indexed. It still carries `as_of`
+ * and `authoritative: false`, because by the time a user clicks, it may have
+ * changed — and the reserve path is what decides.
+ */
+app.get(
+     '/v1/events',
+     asyncHandler(async (req, res) => {
+          const { rows } = await pool.query(
+               `SELECT e.id, e.external_ref, e.name, e.domain, e.starts_at, e.span_max, e.metadata,
+                       count(r.id)::int AS total_resources,
+                       count(r.id) FILTER (WHERE NOT EXISTS (
+                            SELECT 1 FROM allocations a
+                             WHERE a.resource_id = r.id
+                               AND a.state IN ('HELD','CONFIRMED','BLOCKED')
+                               AND (a.state <> 'HELD' OR a.expires_at > now())
+                       ))::int AS available_resources
+                  FROM inventory_events e
+                  LEFT JOIN inventory_resources r ON r.event_id = e.id AND r.state = 'ENABLED'
+                 WHERE e.state = 'ACTIVE'
+                   AND ($1::text IS NULL OR e.domain = $1)
+                 GROUP BY e.id
+                 ORDER BY e.starts_at
+                 LIMIT 100`,
+               [req.query.domain ?? null]
+          );
+
+          res.json({
+               data: rows.map((e) => ({
+                    eventId: e.id,
+                    externalRef: e.external_ref,
+                    name: e.name,
+                    domain: e.domain,
+                    startsAt: e.starts_at,
+                    spanMax: e.span_max,
+                    metadata: e.metadata,
+                    totalResources: e.total_resources,
+                    availableResources: e.available_resources,
+               })),
+               as_of: new Date().toISOString(),
+               authoritative: false,
+          });
+     })
+);
+
+/** The span axis: which stop is which index, for building a journey selector. */
+app.get(
+     '/v1/events/:eventId/span-points',
+     asyncHandler(async (req, res) => {
+          const { rows } = await pool.query(
+               `SELECT position, ref, label, code FROM span_points
+                 WHERE event_id = (SELECT id FROM inventory_events WHERE id = $1 OR external_ref = $1::text)
+                 ORDER BY position`,
+               [req.params.eventId]
+          );
+          res.json({ data: rows });
+     })
+);
+
 app.get(
      '/v1/events/:eventId/availability',
      asyncHandler(async (req, res) => {

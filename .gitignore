@@ -164,4 +164,4 @@ serviceAccountKey.json
 # ============ Service-Specific ============
 # Add service-specific ignores here if needed
 # user-service/uploads/
-# booking-service/temp/
+# booking-service/temp/.logs/

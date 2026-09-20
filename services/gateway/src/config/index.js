@@ -1,43 +1,52 @@
-const config = {
-     PORT: process.env.PORT || 4000,
-     SERVICE_NAME: require('../../package.json').name,
-     NODE_ENV: process.env.NODE_ENV || 'development',
+'use strict';
 
-     REDIS_URL: process.env.REDIS_URL,
-     ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS || 'http://localhost:3000',
-
-     JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET,
-     JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET,
-     ACCESS_TOKEN_EXP: process.env.ACCESS_TOKEN_EXP,
-     REFRESH_TOKEN_EXP: process.env.REFRESH_TOKEN_EXP,
-     ACCESS_TOKEN_EXP_SEC: parseInt(process.env.ACCESS_TOKEN_EXP_SEC || '900', 10),
-     REFRESH_TOKEN_EXP_SEC: parseInt(process.env.REFRESH_TOKEN_EXP_SEC || '604800', 10),
-
-     RATE_LIMIT_WINDOW_MS: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000', 10),
-     RATE_LIMIT_MAX_REQUESTS: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
-
-     SERVICES: {
-          USER_SERVICE_URL: process.env.USER_SERVICE_URL || 'http://localhost:4001',
-          SEARCH_SERVICE_URL: process.env.SEARCH_SERVICE_URL || 'http://localhost:4002',
-          ADMIN_SERVICE_URL: process.env.ADMIN_SERVICE_URL || 'http://localhost:4003',
-          NOTIFICATION_SERVICE_URL: process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:4004',
-          BOOKING_SERVICE_URL: process.env.BOOKING_SERVICE_URL || 'http://localhost:4005',
-          PAYMENT_SERVICE_URL: process.env.PAYMENT_SERVICE_URL || 'http://localhost:4006',
-          INVENTORY_SERVICE_URL: process.env.INVENTORY_SERVICE_URL || 'http://localhost:4007'
-     },
-
-     SERVICE_TIMEOUT_MS: parseInt(process.env.SERVICE_TIMEOUT_MS || '60000', 10),
-
-     CIRCUIT_BREAKER_THRESHOLD: parseInt(process.env.CIRCUIT_BREAKER_THRESHOLD || '5', 10),
-     CIRCUIT_BREAKER_TIMEOUT: parseInt(process.env.CIRCUIT_BREAKER_TIMEOUT || '60000', 10),
+const num = (name, fallback) => {
+     const raw = process.env[name];
+     if (raw === undefined || raw === '') return fallback;
+     const parsed = Number(raw);
+     if (!Number.isFinite(parsed)) throw new Error(`${name} must be a number, got "${raw}"`);
+     return parsed;
 };
 
-const requiredConfig = ['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET'];
+const isProduction = process.env.NODE_ENV === 'production';
 
-requiredConfig.forEach((key) => {
-     if (!config[key]) {
-          throw new Error(`Missing required environment variable: ${key}`);
+const config = {
+     NODE_ENV: process.env.NODE_ENV || 'development',
+     PORT: num('GATEWAY_PORT', 4000),
+
+     INVENTORY_URL: process.env.INVENTORY_URL || 'http://localhost:4001',
+     RESERVATION_URL: process.env.RESERVATION_URL || 'http://localhost:4002',
+     PAYMENT_URL: process.env.PAYMENT_URL || 'http://localhost:4003',
+     REDIS_URL: process.env.REDIS_URL || 'redis://localhost:6379',
+
+     INTERNAL_TOKEN: process.env.INTERNAL_TOKEN || 'dev-internal-token',
+     JWT_SECRET: process.env.JWT_SECRET || 'dev-jwt-secret',
+     JWT_TTL_SECONDS: num('JWT_TTL_SECONDS', 3600),
+     WAITING_ROOM_SECRET: process.env.WAITING_ROOM_SECRET || 'dev-waiting-room-secret',
+
+     ALLOWED_ORIGINS: (process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:4173').split(','),
+     UPSTREAM_TIMEOUT_MS: num('UPSTREAM_TIMEOUT_MS', 10000),
+
+     // Shed above this. Node cannot do useful work while the loop is behind;
+     // accepting more only lengthens the queue.
+     MAX_EVENT_LOOP_LAG_MS: num('MAX_EVENT_LOOP_LAG_MS', 500),
+
+     // Off by default: a waiting room in front of an uncontended event is pure
+     // friction. It is switched on for a specific sale, not left on globally.
+     WAITING_ROOM_ENABLED: process.env.WAITING_ROOM_ENABLED === 'true',
+     WAITING_ROOM_MAX_ACTIVE: num('WAITING_ROOM_MAX_ACTIVE', 100),
+     WAITING_ROOM_DRIP: num('WAITING_ROOM_DRIP', 10),
+     WAITING_ROOM_SESSION_TTL_MS: num('WAITING_ROOM_SESSION_TTL_MS', 600000),
+};
+
+if (isProduction) {
+     for (const [key, dev] of [
+          ['INTERNAL_TOKEN', 'dev-internal-token'],
+          ['JWT_SECRET', 'dev-jwt-secret'],
+          ['WAITING_ROOM_SECRET', 'dev-waiting-room-secret'],
+     ]) {
+          if (config[key] === dev) throw new Error(`${key} must be set to a real secret in production`);
      }
-});
+}
 
-module.exports = { config };
+module.exports = config;
