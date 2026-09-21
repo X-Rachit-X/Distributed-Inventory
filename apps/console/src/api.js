@@ -100,4 +100,21 @@ export const api = {
      cancel: (id) => request(`/reservations/${id}/cancel`, { method: 'POST' }),
 
      invariants: () => request('/ops/invariants'),
+
+     search: (params) => request(`/search?${new URLSearchParams(params)}`),
+     stations: (q) => request(`/stations?q=${encodeURIComponent(q ?? '')}`),
+     quote: (payload) => request('/pricing/quote', { method: 'POST', body: payload }),
+     notifications: () => request('/notifications'),
+
+     scoreboard: () => request('/ops/scoreboard'),
+     issues: (status = 'open') => request(`/ops/issues?status=${status}`),
+     reconcileNow: () => request('/ops/reconcile', { method: 'POST' }),
+     resolveIssue: (id, action, reason) =>
+          request(`/ops/issues/${id}/${action}`, { method: 'POST', body: { reason } }),
+     blockSeat: (resourceId, reason) =>
+          request(`/ops/resources/${resourceId}/block`, { method: 'POST', body: { reason } }),
+     unblockSeat: (resourceId, reason) =>
+          request(`/ops/resources/${resourceId}/unblock`, { method: 'POST', body: { reason } }),
+     setProviderMode: (mode) => request('/ops/provider-mode', { method: 'POST', body: { mode } }),
+     unresolvedPayments: () => request('/ops/unresolved-payments'),
 };

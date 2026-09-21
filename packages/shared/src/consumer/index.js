@@ -26,6 +26,7 @@
  */
 
 const { validate, upcast } = require('../events/registry');
+require('../events/schemas');
 const { metrics } = require('../observability/metrics');
 const { failpoint } = require('../failpoints');
 
@@ -116,7 +117,15 @@ function createIdempotentHandler({ pool, consumerName, logger }) {
  * on every restart and every consumer-group rebalance, so a poison message can
  * loop forever while appearing to be on its first attempt.
  */
-function withDLQ({ pool, consumerName, logger, dlqTopic, producer, maxAttempts = 5, readerVersion = null }) {
+/**
+ * @param {object} deps
+ * @param {(envelope: object, meta: object) => Promise<void>} deps.handle
+ *   The business handler. Receives the validated, upcast envelope.
+ */
+function withDLQ({ pool, consumerName, logger, dlqTopic, producer, handle, maxAttempts = 5, readerVersion = null }) {
+     if (typeof handle !== 'function') {
+          throw new Error('withDLQ requires a `handle` function');
+     }
      return async function eachMessage({ topic, partition, message, heartbeat }) {
           const raw = message.value?.toString();
           let envelope;
@@ -142,8 +151,16 @@ function withDLQ({ pool, consumerName, logger, dlqTopic, producer, maxAttempts =
 
           try {
                validate(envelope);
-               if (readerVersion && envelope.event_version < readerVersion) {
-                    envelope = upcast(envelope, readerVersion);
+               // Reader versions are PER EVENT TYPE. A single number would try
+               // to upcast every type on the topic to it — including types that
+               // only have v1 — and dead-letter perfectly valid events.
+               const target =
+                    readerVersion && typeof readerVersion === 'object'
+                         ? readerVersion[envelope.event_type]
+                         : readerVersion;
+               if (target && envelope.event_version < target) {
+                    envelope = upcast(envelope, target);
+                    validate(envelope);
                }
           } catch (err) {
                await deadLetter({
@@ -166,7 +183,7 @@ function withDLQ({ pool, consumerName, logger, dlqTopic, producer, maxAttempts =
           const attempts = await bumpAttempts(pool, consumerName, envelope.event_id);
 
           try {
-               await this.handle(envelope, { topic, partition, heartbeat });
+               await handle(envelope, { topic, partition, heartbeat });
                await clearAttempts(pool, consumerName, envelope.event_id);
                metrics.eventsConsumed.inc({
                     consumer: consumerName,

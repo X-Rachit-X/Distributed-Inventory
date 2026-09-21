@@ -17,6 +17,14 @@ const config = {
      INVENTORY_URL: process.env.INVENTORY_URL || 'http://localhost:4001',
      RESERVATION_URL: process.env.RESERVATION_URL || 'http://localhost:4002',
      PAYMENT_URL: process.env.PAYMENT_URL || 'http://localhost:4003',
+     RECONCILIATION_URL: process.env.RECONCILIATION_URL || 'http://localhost:4004',
+     NOTIFICATION_URL: process.env.NOTIFICATION_URL || 'http://localhost:4005',
+     DISCOVERY_URL: process.env.DISCOVERY_URL || 'http://localhost:4006',
+     PRICING_URL: process.env.PRICING_URL || 'http://localhost:4007',
+
+     // Emails granted the OPERATOR role at sign-in. Demo-grade identity: a real
+     // deployment takes roles from the identity provider's claims.
+     OPERATOR_EMAILS: (process.env.OPERATOR_EMAILS || 'ops@tessera.dev').split(',').map((e) => e.trim().toLowerCase()),
      REDIS_URL: process.env.REDIS_URL || 'redis://localhost:6379',
 
      INTERNAL_TOKEN: process.env.INTERNAL_TOKEN || 'dev-internal-token',

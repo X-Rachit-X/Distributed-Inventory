@@ -1,0 +1,33 @@
+# Scrapes every Tessera service's /metrics.
+#
+# Local development runs the services on the host, so targets use
+# host.docker.internal. When the application tier runs in compose
+# (profile `app`), the `tessera-compose` job reaches them by service name.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: tessera-host
+    static_configs:
+      - targets:
+          - host.docker.internal:4000   # gateway
+          - host.docker.internal:4001   # inventory-engine
+          - host.docker.internal:4002   # reservation
+          - host.docker.internal:4003   # payment
+          - host.docker.internal:4004   # reconciliation
+          - host.docker.internal:4005   # notification
+          - host.docker.internal:4006   # discovery
+          - host.docker.internal:4007   # pricing
+
+  - job_name: tessera-compose
+    static_configs:
+      - targets:
+          - gateway:4000
+          - inventory:4001
+          - reservation:4002
+          - payment:4003
+          - reconciliation:4004
+          - notification:4005
+          - discovery:4006
+          - pricing:4007

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, newIdempotencyKey, ApiError } from '../api';
 
 /**
@@ -17,10 +17,13 @@ import { api, newIdempotencyKey, ApiError } from '../api';
 export default function SeatMap() {
      const { eventId } = useParams();
      const navigate = useNavigate();
+     const [params] = useSearchParams();
+     const presetFrom = params.get('from');
+     const presetTo = params.get('to');
 
      const [stops, setStops] = useState([]);
-     const [from, setFrom] = useState(0);
-     const [to, setTo] = useState(1);
+     const [from, setFrom] = useState(presetFrom != null ? Number(presetFrom) : 0);
+     const [to, setTo] = useState(presetTo != null ? Number(presetTo) : 1);
      const [resources, setResources] = useState(null);
      const [asOf, setAsOf] = useState(null);
      const [selected, setSelected] = useState([]);
@@ -35,7 +38,9 @@ export default function SeatMap() {
                .then((r) => {
                     const points = r.data ?? [];
                     setStops(points);
-                    if (points.length >= 2) setTo(points.length - 1);
+                    // Keep a journey chosen on the search page; otherwise
+                    // default to the whole route.
+                    if (presetTo == null && points.length >= 2) setTo(points.length - 1);
                })
                .catch(() => setStops([]));
      }, [eventId]);
@@ -44,6 +49,7 @@ export default function SeatMap() {
           () => async () => {
                try {
                     const r = await api.resources(eventId, from, to);
+                    if (to <= from) return;
                     setResources(r.data.resources);
                     setAsOf(r.as_of);
                } catch (e) {
@@ -225,8 +231,9 @@ export default function SeatMap() {
                          <div className="card p-4 flex items-center gap-4 border-teal-500/40 bg-[#171b1e]">
                               <div>
                                    <p className="text-sm">
-                                        {selected.length} seat{selected.length > 1 ? 's' : ''} ·{' '}
+                                        {selected.length} seat{selected.length > 1 ? 's' : ''} · base{' '}
                                         <span className="font-mono">₹{Math.round(total / 100)}</span>
+                                        <span className="text-xs text-slate-500"> · final fare priced server-side</span>
                                    </p>
                                    <p className="text-xs text-slate-500 font-mono">
                                         {selected.map((s) => s.code).join(', ')}

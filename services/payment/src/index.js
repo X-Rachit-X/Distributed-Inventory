@@ -12,6 +12,7 @@
  */
 
 require('../../inventory-engine/src/config/env');
+require('@tessera/shared/src/observability/tracing');
 
 const express = require('express');
 const { createPool } = require('@tessera/shared/src/db/pool');

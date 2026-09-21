@@ -33,7 +33,7 @@ const { NotFoundError } = require('@tessera/shared/src/errors');
 async function getAvailability(db, eventId, opts = {}) {
      const { rows: eventRows } = await db.query(
           `SELECT id, external_ref, domain, name, starts_at, span_kind, span_max, state
-             FROM inventory_events WHERE id = $1 OR external_ref = $1::text`,
+             FROM inventory_events WHERE id::text = $1 OR external_ref = $1`,
           [eventId]
      );
      if (eventRows.length === 0) throw new NotFoundError(`Event ${eventId} not found`);
@@ -114,7 +114,7 @@ async function getAvailability(db, eventId, opts = {}) {
  */
 async function getResources(db, eventId, opts = {}) {
      const { rows: eventRows } = await db.query(
-          `SELECT id, span_max FROM inventory_events WHERE id = $1 OR external_ref = $1::text`,
+          `SELECT id, span_max FROM inventory_events WHERE id::text = $1 OR external_ref = $1`,
           [eventId]
      );
      if (eventRows.length === 0) throw new NotFoundError(`Event ${eventId} not found`);
@@ -175,7 +175,7 @@ async function getResources(db, eventId, opts = {}) {
  */
 async function findAdjacent(db, eventId, { count = 2, spanFrom = 0, spanTo = null, resourceClass = null } = {}) {
      const { rows: eventRows } = await db.query(
-          `SELECT id, span_max FROM inventory_events WHERE id = $1 OR external_ref = $1::text`,
+          `SELECT id, span_max FROM inventory_events WHERE id::text = $1 OR external_ref = $1`,
           [eventId]
      );
      if (eventRows.length === 0) throw new NotFoundError(`Event ${eventId} not found`);
@@ -225,4 +225,66 @@ async function findAdjacent(db, eventId, { count = 2, spanFrom = 0, spanTo = nul
      }));
 }
 
-module.exports = { getAvailability, getResources, findAdjacent };
+/**
+ * Availability for EVERY (from, to) stop pair, per class, in one query.
+ *
+ * This is what the search read model is built from. A seat is available for a
+ * pair only if no live allocation overlaps that exact span, so the answer for
+ * Kanpur→Prayagraj genuinely differs from Delhi→Howrah — which a single
+ * whole-route count would hide.
+ *
+ * Cost is pairs × seats (28 × 336 for the seed data), evaluated in one pass
+ * with the live allocations pulled once into a CTE. It runs on the discovery
+ * side's schedule, never on the booking path.
+ */
+async function getSegmentAvailability(db, eventId) {
+     const { rows: eventRows } = await db.query(
+          `SELECT id, span_max FROM inventory_events WHERE id::text = $1 OR external_ref = $1`,
+          [eventId]
+     );
+     if (eventRows.length === 0) throw new NotFoundError(`Event ${eventId} not found`);
+     const event = eventRows[0];
+
+     const { rows } = await db.query(
+          `WITH pairs AS (
+                SELECT f, t
+                  FROM generate_series(0, $2 - 1) AS f,
+                       generate_series(1, $2) AS t
+                 WHERE t > f
+           ), live AS (
+                SELECT resource_id, span
+                  FROM allocations
+                 WHERE event_id = $1
+                   AND state IN ('HELD','CONFIRMED','BLOCKED')
+                   AND (state <> 'HELD' OR expires_at > now())
+           )
+           SELECT p.f AS span_from, p.t AS span_to, r.class,
+                  count(*)::int AS total,
+                  count(*) FILTER (WHERE NOT EXISTS (
+                       SELECT 1 FROM live l
+                        WHERE l.resource_id = r.id AND l.span && int4range(p.f, p.t)
+                  ))::int AS available,
+                  min(r.base_price_cents) AS min_base_cents
+             FROM pairs p
+            CROSS JOIN inventory_resources r
+            WHERE r.event_id = $1 AND r.state = 'ENABLED'
+            GROUP BY p.f, p.t, r.class
+            ORDER BY p.f, p.t, r.class`,
+          [event.id, event.span_max]
+     );
+
+     return {
+          eventId: event.id,
+          spanMax: event.span_max,
+          segments: rows.map((r) => ({
+               spanFrom: r.span_from,
+               spanTo: r.span_to,
+               class: r.class,
+               total: r.total,
+               available: r.available,
+               minBaseCents: Number(r.min_base_cents),
+          })),
+     };
+}
+
+module.exports = { getAvailability, getResources, findAdjacent, getSegmentAvailability };

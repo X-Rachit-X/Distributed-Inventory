@@ -1,0 +1,19 @@
+# Runs schema migrations before a rollout. The runner takes an advisory lock,
+# so a second concurrent run waits rather than racing.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  namespace: tessera
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: tessera/service:latest
+          command: ["node", "packages/shared/src/db/migrate-cli.js"]
+          envFrom:
+            - configMapRef: { name: tessera-config }
+            - secretRef: { name: tessera-secrets }

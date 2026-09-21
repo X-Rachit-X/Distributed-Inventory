@@ -20,6 +20,7 @@ const config = {
 
      INVENTORY_URL: process.env.INVENTORY_URL || 'http://localhost:4001',
      PAYMENT_URL: process.env.PAYMENT_URL || 'http://localhost:4003',
+     PRICING_URL: process.env.PRICING_URL || 'http://localhost:4007',
 
      // Inventory is fast and local; a slow answer means contention, and failing
      // fast lets the saga retry rather than holding the step open.

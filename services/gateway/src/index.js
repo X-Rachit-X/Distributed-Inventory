@@ -21,6 +21,7 @@
  */
 
 require('../../inventory-engine/src/config/env');
+require('@tessera/shared/src/observability/tracing');
 
 const express = require('express');
 const crypto = require('node:crypto');
@@ -37,6 +38,7 @@ const {
      LoadSheddingError,
      ServiceUnavailableError,
      BadRequestError,
+     ForbiddenError,
 } = require('@tessera/shared/src/errors');
 
 const config = require('./config');
@@ -200,9 +202,11 @@ app.post(
                throw new BadRequestError('A valid email is required');
           }
           // Stable id from the email, so the same demo user keeps their bookings.
-          const customerId = `cust-${hashIdentity(String(email).toLowerCase())}`;
-          const token = signToken({ sub: customerId, email }, config.JWT_SECRET, config.JWT_TTL_SECONDS);
-          res.json({ data: { token, customerId, expiresInSeconds: config.JWT_TTL_SECONDS } });
+          const normalised = String(email).toLowerCase();
+          const customerId = `cust-${hashIdentity(normalised)}`;
+          const role = config.OPERATOR_EMAILS.includes(normalised) ? 'OPERATOR' : 'CUSTOMER';
+          const token = signToken({ sub: customerId, email, role }, config.JWT_SECRET, config.JWT_TTL_SECONDS);
+          res.json({ data: { token, customerId, role, expiresInSeconds: config.JWT_TTL_SECONDS } });
      })
 );
 
@@ -216,6 +220,23 @@ function authenticate(required = true) {
           if (!claims) return next(new UnauthorizedError('Invalid or expired token'));
           req.customerId = claims.sub;
           req.customerEmail = claims.email;
+          req.role = claims.role || 'CUSTOMER';
+          next();
+     };
+}
+
+/**
+ * Role check, applied AFTER authentication.
+ *
+ * Operator actions (withdrawing a seat, resolving a money discrepancy) are
+ * enforced here at the edge AND carry the operator's identity downstream as
+ * `x-actor`, so the audit log names a person rather than "admin".
+ */
+function requireRole(role) {
+     return (req, _res, next) => {
+          if (req.role !== role) {
+               return next(new ForbiddenError(`This action requires the ${role} role`));
+          }
           next();
      };
 }
@@ -312,6 +333,7 @@ function proxy(targetBase, rewrite) {
                          'x-request-id': req.context.requestId,
                          'x-correlation-id': req.context.correlationId,
                          ...(req.customerId ? { 'x-customer-id': req.customerId } : {}),
+                         ...(req.customerEmail ? { 'x-actor': req.customerEmail } : {}),
                          ...(req.get('idempotency-key') ? { 'idempotency-key': req.get('idempotency-key') } : {}),
                     },
                     body: ['POST', 'PUT', 'PATCH'].includes(req.method) ? JSON.stringify(req.body ?? {}) : undefined,
@@ -379,10 +401,92 @@ app.post(
      proxy(config.RESERVATION_URL, (req) => `/v1/reservations/${req.params.id}/cancel`)
 );
 
-// Operational read-outs, used by the dashboard.
+// Search (discovery data, never authoritative).
+app.get('/api/search', proxy(config.DISCOVERY_URL, (req) => `/v1/search${qs(req)}`));
+app.get('/api/stations', proxy(config.DISCOVERY_URL, (req) => `/v1/stations${qs(req)}`));
+app.get(
+     '/api/events/:eventId/adjacent',
+     proxy(config.INVENTORY_URL, (req) => `/v1/events/${req.params.eventId}/adjacent${qs(req)}`)
+);
+
+// Pricing. A quote is informational; the binding price is set server-side
+// when the reservation is created.
+app.post('/api/pricing/quote', proxy(config.PRICING_URL, () => '/v1/quote'));
+app.get('/api/pricing/rules', proxy(config.PRICING_URL, () => '/v1/fare-rules'));
+
+// A customer's notifications.
+app.get('/api/notifications', authenticate(), proxy(config.NOTIFICATION_URL, () => '/v1/notifications'));
+
+// Operational read-outs, used by the dashboard. Read-only and public so the
+// correctness scoreboard can be shown to anyone.
 app.get(
      '/api/ops/invariants',
      proxy(config.INVENTORY_URL, () => '/admin/invariants')
+);
+app.get('/api/ops/scoreboard', proxy(config.RECONCILIATION_URL, () => '/v1/scoreboard'));
+app.get('/api/ops/discovery', proxy(config.DISCOVERY_URL, () => '/v1/status'));
+app.get('/api/ops/notifications', proxy(config.NOTIFICATION_URL, () => '/v1/status'));
+
+// Operator-only.
+app.get(
+     '/api/ops/issues',
+     authenticate(),
+     requireRole('OPERATOR'),
+     proxy(config.RECONCILIATION_URL, (req) => `/v1/issues${qs(req)}`)
+);
+app.get(
+     '/api/ops/reconciliation-runs',
+     authenticate(),
+     requireRole('OPERATOR'),
+     proxy(config.RECONCILIATION_URL, () => '/v1/runs')
+);
+app.post(
+     '/api/ops/reconcile',
+     authenticate(),
+     requireRole('OPERATOR'),
+     proxy(config.RECONCILIATION_URL, () => '/admin/run')
+);
+app.post(
+     '/api/ops/issues/:id/:action',
+     authenticate(),
+     requireRole('OPERATOR'),
+     proxy(config.RECONCILIATION_URL, (req) => `/admin/issues/${req.params.id}/${req.params.action}`)
+);
+app.post(
+     '/api/ops/resources/:resourceId/block',
+     authenticate(),
+     requireRole('OPERATOR'),
+     proxy(config.INVENTORY_URL, (req) => `/admin/resources/${req.params.resourceId}/block`)
+);
+app.post(
+     '/api/ops/resources/:resourceId/unblock',
+     authenticate(),
+     requireRole('OPERATOR'),
+     proxy(config.INVENTORY_URL, (req) => `/admin/resources/${req.params.resourceId}/unblock`)
+);
+app.get(
+     '/api/ops/unresolved-payments',
+     authenticate(),
+     requireRole('OPERATOR'),
+     proxy(config.PAYMENT_URL, () => '/admin/unresolved')
+);
+app.post(
+     '/api/ops/provider-mode',
+     authenticate(),
+     requireRole('OPERATOR'),
+     proxy(config.PAYMENT_URL, () => '/admin/provider-mode')
+);
+app.get(
+     '/api/ops/dead-letters',
+     authenticate(),
+     requireRole('OPERATOR'),
+     proxy(config.NOTIFICATION_URL, () => '/admin/dead-letters')
+);
+app.post(
+     '/api/ops/dead-letters/replay',
+     authenticate(),
+     requireRole('OPERATOR'),
+     proxy(config.NOTIFICATION_URL, () => '/admin/dead-letters/replay')
 );
 
 const qs = (req) => {

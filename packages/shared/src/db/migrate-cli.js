@@ -21,8 +21,8 @@ const SERVICES = [
      { key: 'reservation', dir: 'services/reservation/sql/migrations', env: 'RESERVATION_DATABASE_URL' },
      { key: 'payment', dir: 'services/payment/sql/migrations', env: 'PAYMENT_DATABASE_URL' },
      { key: 'reconciliation', dir: 'services/reconciliation/sql/migrations', env: 'RECONCILIATION_DATABASE_URL' },
-     { key: 'catalog', dir: 'services/catalog/sql/migrations', env: 'CATALOG_DATABASE_URL' },
-     { key: 'identity', dir: 'services/identity/sql/migrations', env: 'IDENTITY_DATABASE_URL' },
+     { key: 'notification', dir: 'services/notification/sql/migrations', env: 'NOTIFICATION_DATABASE_URL' },
+     { key: 'discovery', dir: 'services/discovery/sql/migrations', env: 'DISCOVERY_DATABASE_URL' },
 ];
 
 const DEFAULT_URLS = {
@@ -30,8 +30,8 @@ const DEFAULT_URLS = {
      reservation: 'postgresql://tessera:tessera@localhost:5432/reservation',
      payment: 'postgresql://tessera:tessera@localhost:5432/payment',
      reconciliation: 'postgresql://tessera:tessera@localhost:5432/reconciliation',
-     catalog: 'postgresql://tessera:tessera@localhost:5432/catalog',
-     identity: 'postgresql://tessera:tessera@localhost:5432/identity',
+     notification: 'postgresql://tessera:tessera@localhost:5432/notification',
+     discovery: 'postgresql://tessera:tessera@localhost:5432/discovery',
 };
 
 /** Shared correctness primitives, applied to every service database first. */

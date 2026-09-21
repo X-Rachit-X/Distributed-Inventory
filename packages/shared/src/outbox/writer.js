@@ -22,6 +22,8 @@
 
 const { createEnvelope } = require('../events/envelope');
 const { validate } = require('../events/registry');
+// Registers every event contract, so validation below is never a silent no-op.
+require('../events/schemas');
 
 /**
  * Append an event to the outbox. MUST be called with the same client as the

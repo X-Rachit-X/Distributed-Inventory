@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: tessera
+  labels: { app: gateway, part-of: tessera }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: gateway }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  template:
+    metadata:
+      labels: { app: gateway, part-of: tessera }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4000"
+        prometheus.io/path: /metrics
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext: { runAsNonRoot: true, runAsUser: 1000 }
+      containers:
+        - name: gateway
+          image: tessera/service:latest
+          env:
+            - { name: SERVICE_ENTRY, value: services/gateway/src/index.js }
+          envFrom:
+            - configMapRef: { name: tessera-config }
+            - secretRef: { name: tessera-secrets }
+          ports:
+            - { name: http, containerPort: 4000 }
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            # Process health only. Never dependencies: a database outage must
+            # not turn into a restart loop.
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: tessera
+spec:
+  selector: { app: gateway }
+  ports:
+    - { name: http, port: 4000, targetPort: http }

@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pricing
+  namespace: tessera
+  labels: { app: pricing, part-of: tessera }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: pricing }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  template:
+    metadata:
+      labels: { app: pricing, part-of: tessera }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4007"
+        prometheus.io/path: /metrics
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext: { runAsNonRoot: true, runAsUser: 1000 }
+      containers:
+        - name: pricing
+          image: tessera/service:latest
+          env:
+            - { name: SERVICE_ENTRY, value: services/pricing/src/index.js }
+          envFrom:
+            - configMapRef: { name: tessera-config }
+            - secretRef: { name: tessera-secrets }
+          ports:
+            - { name: http, containerPort: 4007 }
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            # Process health only. Never dependencies: a database outage must
+            # not turn into a restart loop.
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pricing
+  namespace: tessera
+spec:
+  selector: { app: pricing }
+  ports:
+    - { name: http, port: 4007, targetPort: http }

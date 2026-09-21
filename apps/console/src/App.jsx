@@ -6,6 +6,8 @@ import SeatMap from './pages/SeatMap';
 import Reservation from './pages/Reservation';
 import MyBookings from './pages/MyBookings';
 import Correctness from './pages/Correctness';
+import Search from './pages/Search';
+import Operations from './pages/Operations';
 
 function RequireAuth({ children }) {
      const token = useAuth((s) => s.token);
@@ -41,9 +43,11 @@ export default function App() {
                          <Link to="/" className="font-mono font-semibold text-teal-400 mr-4 tracking-tight">
                               tessera
                          </Link>
-                         <NavLink to="/trains">Trains</NavLink>
+                         <NavLink to="/search">Search</NavLink>
+                         <NavLink to="/trains">Departures</NavLink>
                          {token && <NavLink to="/bookings">My bookings</NavLink>}
                          <NavLink to="/correctness">Correctness</NavLink>
+                         <NavLink to="/ops">Operations</NavLink>
 
                          <div className="ml-auto flex items-center gap-3">
                               {token ? (
@@ -66,7 +70,9 @@ export default function App() {
 
                <main className="max-w-6xl mx-auto px-4 py-8">
                     <Routes>
-                         <Route path="/" element={<Navigate to="/trains" replace />} />
+                         <Route path="/" element={<Navigate to="/search" replace />} />
+                         <Route path="/search" element={<Search />} />
+                         <Route path="/ops" element={<Operations />} />
                          <Route path="/login" element={<Login />} />
                          <Route path="/trains" element={<Trains />} />
                          <Route

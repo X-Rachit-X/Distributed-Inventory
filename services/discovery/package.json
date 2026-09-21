@@ -1,27 +1,14 @@
 {
-  "name": "search-service",
-  "version": "1.0.0",
-  "description": "",
+  "name": "@tessera/discovery",
+  "version": "2.0.0",
+  "private": true,
   "main": "src/index.js",
-  "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@elastic/elasticsearch": "^8.12.0",
-    "cookie-parser": "^1.4.7",
-    "cors": "^2.8.6",
-    "dotenv": "^17.2.3",
+    "@tessera/shared": "2.0.0",
     "express": "^5.2.1",
-    "helmet": "^8.1.0",
+    "ioredis": "^5.9.2",
     "kafkajs": "^2.2.4",
-    "winston": "^3.19.0"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.14"
+    "pg": "^8.19.0"
   }
 }

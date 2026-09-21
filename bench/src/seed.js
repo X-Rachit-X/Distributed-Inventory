@@ -123,12 +123,17 @@ async function main() {
                     eventCount += 1;
 
                     // The span axis: which stop is which index.
+                    let offset = 0;
                     for (let s = 0; s < stops.length; s++) {
                          const [code, label] = stops[s];
+                         // Minutes after departure that the train reaches this
+                         // stop. Deterministic gaps so search has real departure
+                         // and arrival times to filter on.
+                         offset += s === 0 ? 0 : 90 + Math.floor(rng() * 120);
                          await client.query(
-                              `INSERT INTO span_points (event_id, position, ref, label, code)
-                               VALUES ($1, $2, $3, $4, $5)`,
-                              [eventId, s, `stn-${code}`, label, code]
+                              `INSERT INTO span_points (event_id, position, ref, label, code, metadata)
+                               VALUES ($1, $2, $3, $4, $5, $6)`,
+                              [eventId, s, `stn-${code}`, label, code, JSON.stringify({ offsetMinutes: offset })]
                          );
                     }
 

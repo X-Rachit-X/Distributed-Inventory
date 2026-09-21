@@ -1,0 +1,9 @@
+node_modules
+**/node_modules
+.git
+.logs
+.env
+apps/console/dist
+bench/results
+docs
+*.md

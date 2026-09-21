@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tessera-config
+  namespace: tessera
+data:
+  NODE_ENV: production
+  KAFKA_BROKERS: kafka.tessera-infra.svc:9092
+  REDIS_URL: redis://redis.tessera-infra.svc:6379
+  ELASTICSEARCH_URL: http://elasticsearch.tessera-infra.svc:9200
+  INVENTORY_URL: http://inventory:4001
+  RESERVATION_URL: http://reservation:4002
+  PAYMENT_URL: http://payment:4003
+  RECONCILIATION_URL: http://reconciliation:4004
+  NOTIFICATION_URL: http://notification:4005
+  DISCOVERY_URL: http://discovery:4006
+  PRICING_URL: http://pricing:4007
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.observability.svc:4318

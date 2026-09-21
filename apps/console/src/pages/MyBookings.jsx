@@ -4,13 +4,18 @@ import { api } from '../api';
 
 export default function MyBookings() {
      const [items, setItems] = useState(null);
+     const [notes, setNotes] = useState([]);
      const [error, setError] = useState(null);
 
-     const load = () =>
-          api
+     const load = () => {
+          api.notifications()
+               .then((r) => setNotes(r.data))
+               .catch(() => setNotes([]));
+          return api
                .listReservations()
                .then((r) => setItems(r.data))
                .catch((e) => setError(e.message));
+     };
 
      useEffect(() => {
           load();
@@ -42,6 +47,17 @@ export default function MyBookings() {
      return (
           <div>
                <h1 className="text-2xl font-semibold mb-6">My bookings</h1>
+               {notes.length > 0 && (
+                    <div className="card p-4 mb-6">
+                         <p className="label mb-2">Notifications — delivered by a Kafka consumer, once each</p>
+                         {notes.slice(0, 5).map((n) => (
+                              <div key={n.id} className="border-t border-[#2b3237] py-2 first:border-0">
+                                   <p className="text-sm">{n.subject}</p>
+                                   <p className="text-xs text-slate-500">{n.body}</p>
+                              </div>
+                         ))}
+                    </div>
+               )}
                <div className="space-y-2">
                     {items.map((r) => {
                          const cancellable = !['CANCELLED', 'FAILED', 'EXPIRED'].includes(r.state);

@@ -1,535 +1,288 @@
-# ScaleRail — System Architecture
+# Architecture — how Tessera works, A to Z
 
-## Table of Contents
+## 1. The problem
 
-1. [System Overview](#1-system-overview)
-2. [Service Inventory](#2-service-inventory)
-3. [Core Data Flows](#3-core-data-flows)
-4. [Database Design](#4-database-design)
-5. [Kafka Event Topology](#5-kafka-event-topology)
-6. [Seat Locking Strategy](#6-seat-locking-strategy)
-7. [Authentication & Security](#7-authentication--security)
-8. [Search Architecture](#8-search-architecture)
-9. [Segment Booking](#9-segment-booking)
-10. [Deployment Topology](#10-deployment-topology)
+Allocate scarce inventory to a very large number of simultaneous claimants so that
+the number sold **never** exceeds what exists — while payment providers time out,
+processes crash mid-step, the message broker goes down, and messages arrive twice
+or out of order.
 
----
+Railway ticketing is the demo (think a Tatkal window opening at 10:00 with a
+million people and 500 seats). The engine underneath is generic: a hotel room over
+a range of nights, a concert seat, a clinic slot and a rental unit over time slots
+are all the same shape.
 
-## 1. System Overview
+## 2. The central decision: one shape, one constraint
 
-ScaleRail is a **microservices-based railway ticketing platform** designed around three core principles:
+Every kind of inventory is a **resource occupied over a span**:
 
-- **No shared databases** — each service owns its data schema
-- **Async where possible** — inter-service communication uses Kafka for post-payment flows
-- **Idempotency** — every mutation operation is idempotent to handle retries safely
+| Domain | Resource | Span |
+|---|---|---|
+| Railway | seat | range of station stops `[3,7)` |
+| Hotel | room | range of nights `[0,3)` |
+| Concert / appointment | seat / slot | `[0,1)` |
+| Rental | unit | range of time slots |
 
-### High-Level Context Diagram
+"Do not oversell" then becomes one sentence the database can enforce:
+*two live allocations of the same resource must not overlap.*
 
-```
-┌────────────────────────────────────────────────────────────────────┐
-│                        Browser / Client                            │
-│                React 18 + Vite · Tailwind · Zustand               │
-└────────────────────────────┬───────────────────────────────────────┘
-                             │ HTTPS
-                             ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                         API Gateway                                │
-│     - JWT validation                                               │
-│     - Request forwarding (http-proxy-middleware)                   │
-│     - Rate limiting                                                │
-│     - Internal secret injection (X-Internal-Secret header)        │
-│     Port: 3000                                                     │
-└────┬───────┬────────┬──────────┬──────────┬──────────┬────────────┘
-     │       │        │          │          │          │
-     ▼       ▼        ▼          ▼          ▼          ▼
-  User   Booking   Search    Inventory  Payment    Admin
-  Svc    Svc       Svc       Svc        Svc        Svc
-  :3001  :3002     :3003     :3004      :3005      :3007
+```sql
+ALTER TABLE allocations ADD CONSTRAINT allocations_no_overlap
+  EXCLUDE USING gist (resource_id WITH =, span WITH &&)
+  WHERE (state IN ('HELD','CONFIRMED','BLOCKED'));
 ```
 
----
+Consequences:
 
-## 2. Service Inventory
+- Overselling is prevented by PostgreSQL **refusing the row** (SQLSTATE 23P01),
+  not by application code being careful. A bug anywhere above the database costs
+  latency, never a double-booked seat.
+- Half-open ranges model the domain exactly: a passenger alighting at stop 5 and
+  another boarding at stop 5 do not conflict. That is **segment resale** — one seat
+  sold several times across non-overlapping stretches of one journey.
+- Expired, released and cancelled rows stay as history but drop out of the
+  constraint (the `WHERE` clause), so the audit trail costs no availability.
 
-### 2.1 API Gateway (`api-gateway/`)
+## 3. The services
 
-**Responsibility**: Single ingress point. Validates JWTs, forwards requests to the appropriate downstream service, and injects `X-Internal-Secret` + `X-User-*` headers.
+```
+                     Browser (React console)
+                              │
+                              ▼
+                  ┌───────── gateway :4000 ─────────┐
+                  │ rate limit → waiting room → auth │
+                  │ → RBAC → load shedding → proxy   │
+                  └──┬──────┬──────┬──────┬──────┬───┘
+                     │      │      │      │      │
+          discovery  │ reservation │ pricing  reconciliation   notification
+            :4006    │   :4002     │  :4007      :4004            :4005
+          (search)   │  (saga)     │ (fares)  (scoreboard)     (emails)
+                     │      │      │               │  read-only    ▲
+                     │      ├──────┼──► inventory-engine :4001     │
+                     │      │      │    (THE AUTHORITY)            │
+                     │      └──────┼──► payment :4003              │
+                     │             │    (UNKNOWN state, provider)  │
+                     ▼             ▼                               │
+     ┌──────────── PostgreSQL 16: one database per service ────────┤
+     │  inventory · reservation · payment · reconciliation ·       │
+     │  notification · discovery                                    │
+     └───── outbox rows ──► relay ──► Kafka (KRaft, 13 topics) ─────┘
+                                         │
+                            Redis 7: rate limits, waiting room, L2 cache
+                            Elasticsearch 8: search index (discovery only)
+```
 
-**Routes proxied**:
+| Service | Owns | Does |
+|---|---|---|
+| **gateway** | nothing (stateless) | token-bucket rate limiting, virtual waiting room, JWT auth, role checks, event-loop-lag load shedding, proxying with correlation ids |
+| **inventory-engine** | allocations, holds, ledger, pools | reserve / confirm / release / cancel; lazy expiry; expiry sweeper; admin block/unblock; invariant views |
+| **reservation** | reservations, bookings, sagas | public booking API; durable saga orchestrator driving hold → pay → confirm |
+| **payment** | payments, refunds, provider events | payment state machine with `UNKNOWN`; resolver; webhook verification; fault-injecting fake provider |
+| **pricing** | nothing (stateless) | server-side fares: base × distance share × demand tier |
+| **discovery** | search projection | consumes inventory events, keeps a read model, serves search from Elasticsearch with PostgreSQL fallback, L1/L2 cache |
+| **notification** | notifications | consumes booking events, sends each email exactly once, DLQ + replay |
+| **reconciliation** | issues, repair log | compares services, raises issues, repairs only safe inventory problems, scoreboard |
 
-| Prefix | Target |
+## 4. A booking, end to end
+
+1. **Search** (`GET /api/search`) → discovery. Answer comes from Elasticsearch (or
+   PostgreSQL if ES is down), via an L1 in-process cache and an L2 Redis cache. It
+   carries `as_of` and `authoritative: false`.
+2. **Seat map** (`GET /api/events/:id/resources?spanFrom&spanTo`) → inventory,
+   read without locks. Also discovery-grade: may be stale by the time you click.
+3. **Reserve** (`POST /api/reservations` with an `Idempotency-Key`):
+   - gateway: rate limit (reserve bucket: burst 5), verify JWT, optionally require
+     a waiting-room admission token, forward with `x-customer-id`;
+   - reservation: fairness check (max concurrent holds per customer), **quote the
+     price server-side** from pricing (before any transaction), then in **one
+     transaction** write the reservation, its items and a saga row, and record the
+     idempotency response. Return **202** immediately with a poll URL.
+4. **Saga worker** (inside reservation) claims the saga with `FOR UPDATE SKIP LOCKED`
+   plus a lease, and executes **one step per claim**:
+   - `HOLD_PENDING` → inventory `POST /internal/reserve` (idempotency key
+     `saga:<id>:hold`). In one transaction the engine: locks the resource rows in
+     sorted order, reaps expired holds on those resources, inserts the hold and
+     allocations (the constraint decides), claims pool quantities, appends ledger
+     entries, writes an outbox event. → `HOLD_CREATED`.
+   - `PAYMENT_PENDING` → payment `POST /internal/charge` (key `saga:<id>:payment`).
+     Success → `PAYMENT_AUTHORIZED`. Decline → `PAYMENT_FAILED` → release. **Timeout
+     → `PAYMENT_UNKNOWN`**: the resolver asks the provider what happened.
+   - `CONFIRM_PENDING` → inventory `POST /internal/confirm`. The confirm is a single
+     guarded UPDATE (`… AND expires_at > now()`), so an expired hold can never be
+     confirmed. Success → booking row + `booking.confirmed` event → `CONFIRMED`.
+     Hold expired after payment → `REFUND_PENDING` → refund.
+5. **Poll** (`GET /api/reservations/:id`) shows human-readable progress.
+6. **Events**: outbox relays publish to Kafka; notification sends the email once;
+   discovery marks the train dirty and refreshes its projection.
+7. **Reconciliation** later confirms the services agree.
+
+## 5. Concurrency: how contention is handled
+
+The engine's reserve path is the result of measurement (see
+`docs/benchmarks/RESULTS.md`):
+
+| Layer | Role | Correctness dependency? |
+|---|---|---|
+| Sorted `SELECT … FOR UPDATE` on the resource rows | orderly FIFO queue per seat; no deadlock cycles across multi-seat requests | **No** — throughput |
+| Lazy reap of expired holds on those rows | makes the TTL authoritative at the moment it matters | yes (for availability) |
+| GiST exclusion constraint | the final arbiter | **Yes — the only one** |
+
+Why the row lock exists: the constraint alone is correct but collapsed under
+contention — 1,000 requests for one seat produced **609 deadlocks** and a 30-second
+p99, because a GiST exclusion constraint inserts and *then* scans for conflicts,
+waiting on in-progress inserters, which forms wait cycles. Queueing on the row first
+gave 0 deadlocks and a 186ms p99 (86× throughput).
+
+## 6. Time: holds and expiry
+
+- A hold has `expires_at` set by the **database clock**.
+- **Lazy expiry**: `reserve` expires stale holds on exactly the resources it is
+  about to touch, inside its own transaction. So the TTL is enforced by the
+  authority at the moment of contention, regardless of any background job.
+- **Sweeper**: `FOR UPDATE SKIP LOCKED` in batches; many replicas, no leader. It is a
+  *freshness* job (returns abandoned seats to browsing users promptly), not a
+  correctness dependency.
+- **Confirm** checks expiry in the same UPDATE statement, so there is no gap between
+  "still valid" and "confirmed".
+
+## 7. Reliability plumbing
+
+| Mechanism | Guarantee | Where |
+|---|---|---|
+| Claim-first idempotency | two concurrent retries cannot both run; a lost response replays the original | `packages/shared/src/idempotency` |
+| Transactional outbox | an event exists iff its business change committed | `outbox/writer.js` |
+| Outbox relay | publishes outside any transaction, marks after; head-of-line per aggregate keeps order; backoff with jitter; dead-letters poison rows | `outbox/relay.js` |
+| Idempotent consumer | dedupe marker in the same transaction as the effect → effectively-once | `consumer/index.js` |
+| `aggregate_seq` guard | out-of-order events for a projection are discarded | `consumer/index.js` |
+| Persistent DLQ + replay | poison messages don't stall a partition; replay after a fix | `consumer/index.js`, notification admin API |
+| Versioned event contracts | producer and consumer validate; v1→v2 upcasting | `events/schemas.js`, `events/registry.js` |
+| Durable saga | progress is a row; crash anywhere, another worker resumes | `reservation/src/saga/orchestrator.js` |
+| Failpoints | deterministic crash injection at exact lines | `failpoints/index.js` |
+
+Delivery semantics, stated plainly: Kafka gives **at-least-once**. With the dedupe
+row in the consumer's transaction, the **business effect** is effectively-once.
+Kafka's own "exactly-once" does not extend to a PostgreSQL write.
+
+## 8. Payments
+
+- A charge row is committed **before** the provider is called, so a crash mid-call
+  leaves an attributable record.
+- Every transition is a guarded `UPDATE … WHERE state = $expected`, and a trigger
+  rejects illegal transitions.
+- **Timeout ⇒ `UNKNOWN`**, never `FAILED`. A resolver asks the provider (by our
+  idempotency key) and moves to `CAPTURED` or `FAILED`. The charge is never retried.
+- Webhooks: HMAC over `timestamp.body` (constant-time compare), 5-minute window,
+  deduplicated by provider event id. A bad signature is logged and **never** moves a
+  payment (the old system marked it FAILED — money taken, no booking).
+- Out-of-order webhooks (capture before authorise) are detected and skipped.
+
+## 9. Admission control and fairness
+
+| Mechanism | Question it answers |
 |---|---|
-| `/api/users/*` | User Service |
-| `/api/search/*` | Search Service |
-| `/api/inventory/*` | Inventory Service |
-| `/api/bookings/*` | Booking Service |
-| `/api/payments/*` | Payment Service |
-| `/api/admin/*` | Admin Service |
-
----
-
-### 2.2 User Service (`user-service/`)
-
-**Responsibility**: User registration (OTP-based), login, JWT issuance, refresh token rotation, profile management.
-
-**Key design decisions**:
-- OTP stored in Redis with a 10-minute TTL, not in the database
-- Refresh tokens stored as HTTP-only `SameSite=Strict` cookies
-- Access tokens are short-lived (15 min); refresh tokens last 7 days
-- Device fingerprinting added to refresh tokens to detect theft
-
-**Key dependencies**: PostgreSQL (user data), Redis (OTP + refresh token store), Kafka (produce notification events)
-
----
-
-### 2.3 Booking Service (`booking-service/`)
-
-**Responsibility**: Orchestrates the full booking lifecycle using a **saga pattern**.
-
-**Booking states**:
-```
-INITIATED → SEATS_HELD → PAYMENT_PENDING → CONFIRMED
-                      ↘                 ↘
-                      FAILED          CANCELLED → REFUND_PENDING → REFUNDED
-```
-
-**Idempotency**: Every `POST /bookings` request requires a client-generated `idempotencyKey` (UUID). The service stores this key and returns the existing result if the same key is replayed.
-
-**Key dependencies**: PostgreSQL, Kafka (produce booking events + consume payment events)
-
----
-
-### 2.4 Inventory Service (`inventory-service/`)
-
-**Responsibility**: Owns `seat_inventory` and `schedule` tables. Handles seat status management with Redis locking.
-
-**Seat states**:
-```
-AVAILABLE → LOCKED (Redis TTL) → BOOKED
-                             ↘ AVAILABLE (on timeout)
-         → CANCELLED
-```
-
-**Segment awareness**: Each seat can track partial-route bookings via `from_sequence` / `to_sequence` columns, enabling multi-passenger overlap detection.
-
-**Key dependencies**: PostgreSQL, Redis (seat locks), Kafka (consume booking events, produce inventory events)
-
----
-
-### 2.5 Payment Service (`payment-service/`)
-
-**Responsibility**: Creates Razorpay orders, verifies webhook signatures, emits payment events to Kafka.
-
-**Payment flow**:
-1. Booking Service calls Payment Service → creates Razorpay order
-2. Frontend opens Razorpay checkout widget
-3. User pays → Razorpay calls webhook
-4. Payment Service verifies HMAC signature → emits `payment.completed` to Kafka
-5. Booking Service consumes event → confirms booking
-
-**Key dependencies**: PostgreSQL, Razorpay SDK, Kafka
-
----
-
-### 2.6 Search Service (`search-service/`)
-
-**Responsibility**: Elasticsearch-backed train search with fuzzy matching.
-
-**Index**: `trains` index with station names, departure times, and seat summary denormalized for fast retrieval.
-
-**Fuzzy search**: Uses Elasticsearch `multi_match` with `fuzziness: AUTO` — handles typos like "Mumbai" vs "Mumbay".
-
-**Kafka consumer**: Listens to train/schedule updates from Admin Service to keep the index fresh.
-
-**Key dependencies**: Elasticsearch 8.12, Kafka
-
----
-
-### 2.7 Notification Service (`notification-service/`)
-
-**Responsibility**: Pure consumer — listens to Kafka events and sends transactional emails.
-
-**Events handled**:
-- `notification.booking_confirmed` → sends booking confirmation email
-- `notification.booking_cancelled` → sends cancellation email
-- `notification.otp` → sends OTP email for registration
-
-**Key dependencies**: Kafka, SMTP (Nodemailer)
-
----
-
-### 2.8 Admin Service (`admin-service/`)
-
-**Responsibility**: CRUD API for stations, trains, routes, and schedules. Also triggers Elasticsearch index updates via Kafka.
-
-**Key dependencies**: PostgreSQL (shared admin schema), Kafka
-
----
-
-## 3. Core Data Flows
-
-### 3.1 User Registration
-
-```
-Browser
-  │
-  ├─ POST /api/users/auth/register/send-otp
-  │     User Service: validates → stores OTP in Redis (10 min TTL) → publishes notification.otp
-  │
-  │  [Kafka] → Notification Service → sends OTP email
-  │
-  ├─ POST /api/users/auth/register/verify-otp
-  │     User Service: reads Redis → matches OTP → creates user in Postgres → deletes OTP
-  │
-  └─ Response: { message: "Email verified" }
-```
-
-### 3.2 Train Search
-
-```
-Browser
-  │
-  └─ GET /api/search/trains?from=DEL&to=MUM&date=2025-01-15
-       API Gateway → Search Service
-       Search Service: Elasticsearch multi_match query
-         → returns ranked train results with seat summaries
-```
-
-### 3.3 Booking Saga (Happy Path)
-
-```
-Browser
-  │
-  ├─ 1. GET /api/inventory/:scheduleId/seats
-  │       Inventory Service: fetches seats, applies segment filter if needed
-  │
-  ├─ 2. POST /api/bookings  { scheduleId, seatIds, passengers, idempotencyKey }
-  │       API Gateway → Booking Service
-  │       Booking Service:
-  │         a. Creates booking record (INITIATED)
-  │         b. Calls Inventory Service (internal): lock seats in Redis + mark LOCKED
-  │         c. Creates Razorpay order via Payment Service (internal)
-  │         d. Updates booking to SEATS_HELD / PAYMENT_PENDING
-  │         e. Returns { bookingId, paymentOrder: { gatewayOrderId, amount, keyId } }
-  │
-  ├─ 3. [Browser opens Razorpay Checkout]
-  │
-  ├─ 4. POST /api/payments/webhook  (Razorpay → Payment Service directly)
-  │       Payment Service: verifies HMAC signature → emits payment.completed to Kafka
-  │
-  ├─ 5. [Kafka] payment.completed
-  │       Booking Service consumer: updates booking → CONFIRMED
-  │       Inventory Service consumer: marks seats BOOKED (removes Redis lock)
-  │       Booking Service: emits notification.booking_confirmed
-  │
-  ├─ 6. [Kafka] notification.booking_confirmed
-  │       Notification Service: sends confirmation email
-  │
-  └─ 7. Browser polls GET /api/bookings/:id → sees CONFIRMED status
-```
-
-### 3.4 Cancellation & Refund
-
-```
-Browser: DELETE /api/bookings/:id
-  │
-  Booking Service:
-    ├─ Validates booking is cancellable (CONFIRMED / SEATS_HELD / PAYMENT_PENDING)
-    ├─ Updates status → CANCELLED
-    ├─ Calls Inventory Service: releases seat locks / marks seats CANCELLED
-    ├─ Calls Payment Service: initiates Razorpay refund if payment was captured
-    └─ Emits notification.booking_cancelled → email sent
-```
-
----
-
-## 4. Database Design
-
-### User Service (PostgreSQL)
-
-```sql
-users
-  id            UUID PRIMARY KEY
-  first_name    VARCHAR
-  last_name     VARCHAR
-  email         VARCHAR UNIQUE
-  password_hash VARCHAR
-  is_verified   BOOLEAN
-  created_at    TIMESTAMP
-
-refresh_tokens
-  id         UUID PRIMARY KEY
-  user_id    UUID REFERENCES users
-  token_hash VARCHAR
-  expires_at TIMESTAMP
-  revoked    BOOLEAN
-```
-
-### Booking Service (PostgreSQL)
-
-```sql
-bookings
-  id               UUID PRIMARY KEY
-  user_id          UUID
-  train_id         UUID
-  schedule_id      UUID
-  train_name       VARCHAR
-  train_number     VARCHAR
-  departure_date   DATE
-  status           ENUM (INITIATED|SEATS_HELD|PAYMENT_PENDING|CONFIRMED|FAILED|CANCELLED|REFUND_PENDING|REFUNDED)
-  total_amount     INTEGER (paise)
-  seat_count       INTEGER
-  failure_reason   VARCHAR
-  idempotency_key  VARCHAR UNIQUE
-  from_station_id  UUID
-  to_station_id    UUID
-  from_seq         INTEGER
-  to_seq           INTEGER
-  created_at       TIMESTAMP
-
-booking_seats
-  id         UUID PRIMARY KEY
-  booking_id UUID REFERENCES bookings
-  seat_id    UUID
-  seat_number INTEGER
-  seat_type   ENUM
-  price       INTEGER
-
-booking_passengers
-  id         UUID PRIMARY KEY
-  booking_id UUID REFERENCES bookings
-  name       VARCHAR
-  age        INTEGER
-  gender     ENUM
-```
-
-### Inventory Service (PostgreSQL)
-
-```sql
-trains
-  id           UUID PRIMARY KEY
-  name         VARCHAR
-  number       VARCHAR UNIQUE
-  total_seats  INTEGER
-
-routes
-  id           UUID PRIMARY KEY
-  train_id     UUID REFERENCES trains
-
-route_stations
-  id               UUID PRIMARY KEY
-  route_id         UUID REFERENCES routes
-  station_id       UUID REFERENCES stations
-  sequence_number  INTEGER
-  arrival_time     TIME
-  departure_time   TIME
-
-schedules
-  id             UUID PRIMARY KEY
-  train_id       UUID
-  route_id       UUID
-  departure_date DATE
-  status         ENUM (SCHEDULED|RUNNING|ARRIVED|CANCELLED)
-
-seat_inventory
-  id              UUID PRIMARY KEY
-  schedule_id     UUID REFERENCES schedules
-  seat_number     INTEGER
-  seat_type       ENUM (SLEEPER|AC_3_TIER|AC_2_TIER|AC_FIRST|GENERAL)
-  price           INTEGER
-  status          ENUM (AVAILABLE|LOCKED|BOOKED|CANCELLED)
-  from_seq        INTEGER   -- segment booking: locked from this sequence
-  to_seq          INTEGER   -- segment booking: locked to this sequence
-  booking_id      UUID
-  locked_until    TIMESTAMP
-  updated_at      TIMESTAMP
-```
-
----
-
-## 5. Kafka Event Topology
-
-### Topics and Producers → Consumers
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                      Kafka Topics                                   │
-├──────────────────────────┬──────────────┬───────────────────────────┤
-│ Topic                    │ Producer     │ Consumer(s)               │
-├──────────────────────────┼──────────────┼───────────────────────────┤
-│ booking.created          │ Booking Svc  │ Inventory Svc             │
-│ booking.confirmed        │ Booking Svc  │ Notification Svc          │
-│ booking.cancelled        │ Booking Svc  │ Inventory Svc, Notif Svc  │
-│ inventory.seats_held     │ Inventory Svc│ Booking Svc               │
-│ inventory.seats_released │ Inventory Svc│ Booking Svc               │
-│ payment.order_created    │ Payment Svc  │ Booking Svc               │
-│ payment.completed        │ Payment Svc  │ Booking Svc               │
-│ payment.failed           │ Payment Svc  │ Booking Svc               │
-│ payment.refund_initiated │ Payment Svc  │ Booking Svc, Notif Svc    │
-│ notification.otp         │ User Svc     │ Notification Svc          │
-│ notification.*           │ Booking Svc  │ Notification Svc          │
-│ train.upserted           │ Admin Svc    │ Search Svc                │
-│ schedule.upserted        │ Admin Svc    │ Search Svc, Inventory Svc │
-└──────────────────────────┴──────────────┴───────────────────────────┘
-```
-
-**Dead Letter Queue (DLQ)**: Every consumer wraps processing in a try/catch. On repeated failure (after retries), messages are routed to a `.dlq` topic for inspection via Kafka UI.
-
----
-
-## 6. Seat Locking Strategy
-
-Seat locking uses **Redis** to prevent race conditions during concurrent bookings:
-
-### Lock lifecycle
-
-```
-1. User selects seats → frontend displays available seats
-2. POST /bookings → Inventory Service acquires Redis lock for each seatId:
-   SETEX seat:lock:{seatId} 600 {userId}  (10-minute TTL)
-3. Seat status in Postgres updated: AVAILABLE → LOCKED
-4. If payment succeeds → seat status: LOCKED → BOOKED (Redis lock removed)
-5. If payment fails or times out → Redis TTL expires → background job resets seat to AVAILABLE
-```
-
-### Segment-aware locking
-
-For partial-route bookings, a seat may be `BOOKED` for segment A→B but `AVAILABLE` for C→D. The inventory service checks segment overlap using `from_seq` / `to_seq` ranges:
-
-```sql
--- A seat is unavailable for a requested segment [reqFrom, reqTo] if:
-NOT (existing.to_seq <= reqFrom OR existing.from_seq >= reqTo)
-```
-
----
-
-## 7. Authentication & Security
-
-### JWT Flow
-
-```
-Login → { accessToken (15min) } + Set-Cookie: refreshToken (7d, HttpOnly, SameSite=Strict)
-  │
-  ├─ accessToken stored in memory (Zustand store, never localStorage)
-  ├─ All API calls: Authorization: Bearer <accessToken>
-  │
-  └─ On 401: Axios interceptor → POST /auth/refresh
-               → new accessToken + rotated refreshToken cookie
-               → Retry original request
-```
-
-### Internal Service Auth
-
-All inter-service calls (Booking → Inventory, Booking → Payment) carry an `X-Internal-Secret` header injected by the API Gateway. Each downstream service validates this header to reject unauthenticated direct access.
-
-### Razorpay Webhook Verification
-
-```js
-// Payment Service webhook handler:
-const body = req.rawBody; // must be raw Buffer, not parsed JSON
-const signature = req.headers['x-razorpay-signature'];
-const digest = crypto.createHmac('sha256', RAZORPAY_WEBHOOK_SECRET)
-                     .update(body).digest('hex');
-if (digest !== signature) throw new Error('Invalid webhook signature');
-```
-
----
-
-## 8. Search Architecture
-
-### Elasticsearch Index: `trains`
-
-```json
-{
-  "mappings": {
-    "properties": {
-      "trainId": { "type": "keyword" },
-      "trainName": { "type": "text", "analyzer": "standard" },
-      "trainNumber": { "type": "keyword" },
-      "scheduleId": { "type": "keyword" },
-      "fromStation": {
-        "properties": {
-          "stationId": { "type": "keyword" },
-          "name": { "type": "text", "analyzer": "standard" },
-          "code": { "type": "keyword" },
-          "departure": { "type": "keyword" }
-        }
-      },
-      "toStation": { "...same as fromStation..." },
-      "departureDate": { "type": "date" },
-      "seatSummary": {
-        "properties": {
-          "SLEEPER": { "type": "integer" },
-          "AC_3_TIER": { "type": "integer" },
-          "AC_2_TIER": { "type": "integer" },
-          "total": { "type": "integer" }
-        }
-      }
-    }
-  }
-}
-```
-
-### Query strategy
-
-```
-GET /api/search/trains?from=DEL&to=MUM&date=2025-01-15
-
-→ Elasticsearch bool query:
-  must: [
-    { multi_match: { query: "DEL", fields: ["fromStation.name", "fromStation.code"], fuzziness: "AUTO" } },
-    { multi_match: { query: "MUM", fields: ["toStation.name", "toStation.code"],   fuzziness: "AUTO" } },
-  ]
-  filter: [
-    { term: { departureDate: "2025-01-15" } },    // if date provided
-    { range: { "seatSummary.total": { gt: 0 } } } // only trains with seats
-  ]
-```
-
----
-
-## 9. Segment Booking
-
-ScaleRail supports **partial-route booking** — a user can board at any intermediate station and alight at another, not just the train's origin/destination.
-
-### How it works
-
-1. Search returns trains with `from.sequenceNumber` and `to.sequenceNumber` for the requested stations
-2. Frontend stores these in Zustand (`fromStation`, `toStation`)
-3. `GET /inventory/:scheduleId/seats?fromSeq=2&toSeq=5` — the Inventory Service filters seats based on segment overlap
-4. `POST /bookings` — includes `fromStationId`, `toStationId`, `fromSeq`, `toSeq`
-5. Booking record stores segment; seat lock stores the segment range
-
-This means seats on the same coach can be sold multiple times for non-overlapping segments, maximizing train capacity.
-
----
-
-## 10. Deployment Topology
-
-### Local Development (Docker Compose)
-
-```
-docker-compose.yml provisions:
-  postgres     → single Postgres instance, multiple databases
-  redis        → Redis Stack (Redis + RedisInsight)
-  zookeeper    → Kafka coordinator
-  kafka        → Single-broker Confluent Kafka
-  kafka-ui     → provectuslabs/kafka-ui
-  elasticsearch → 8.12, single-node
-  kibana        → 8.12
-  pgadmin       → dpage/pgadmin4
-```
-
-### Production Recommendations
-
-| Component | Recommendation |
+| Token bucket (per user/IP, per route, one Lua script) | is this *one client* asking too often? |
+| Virtual waiting room (Lua; signed admission tokens) | how many people may be *inside* at all? |
+| Event-loop-lag load shedding (503 + Retry-After) | is *this instance* saturated? |
+| Max concurrent holds per customer | can one customer park the inventory? |
+| Hold TTL | can abandoned checkouts starve others? |
+
+Redis down → token bucket falls back to a conservative in-process limiter (fails
+closed, not open); admitted waiting-room users keep working because tokens are
+verified statelessly; bookings are unaffected.
+
+## 10. Read side
+
+- **discovery** is a projection. Inventory events mark a train *dirty* (durably, in
+  the consumer's transaction); a refresher re-reads availability from inventory and
+  rewrites the projection and the ES index. Events are "this changed" signals, not
+  state, so a lost event cannot leave the projection permanently wrong; a periodic
+  resync heals anything missed.
+- Refreshes are **coalesced**: a hot train emitting hundreds of events a second is
+  refreshed at most once per tick.
+- Caching: L1 (in-process, 1s) → L2 (Redis, ~5s, jittered TTL) → ES/PG. Cache keys
+  carry a version bumped on every refresh, so invalidation is implicit. Single-flight
+  stops stampedes.
+- Elasticsearch has a **circuit breaker**: after a failure it is skipped for 10s and
+  PostgreSQL (trigram word-similarity) answers.
+
+## 11. Pricing
+
+`fare = base × max(0.3, span_share) × demand_tier`, rounded to whole rupees.
+Tiers by class occupancy: <50% standard, <80% +10%, <95% +25%, else +50%. One
+module (`packages/shared/src/pricing`) is used by both the pricing service and the
+search projection, so search's "from ₹X" equals the checkout fare. The price is
+quoted server-side and stored on the hold; a client-sent price is ignored.
+
+## 12. Reconciliation
+
+Eight checks compare services: duplicate booking, ledger drift, payment without
+booking, confirmed without payment, expired hold still allocated, payment UNKNOWN
+too long, stuck saga, outbox backlog. Rules:
+
+- **Grace windows**, and an issue must be seen in **two passes** before action — no
+  snapshot across databases is atomic.
+- **Only inventory-only, reversible repairs are automatic** (expire a stranded hold,
+  nudge a stuck saga). Anything involving money gets a recommendation and waits for
+  a human (`AWAITING_HUMAN`).
+- Every repair is written to an append-only repair log.
+
+## 13. The ledger
+
+Every inventory movement appends `(entry_type, delta)`: `CAPACITY_ADDED +1`,
+`ALLOCATED −1`, `RELEASED/EXPIRED/CANCELLED/UNBLOCKED +1`, `CONFIRMED 0`,
+`BLOCKED −1`. Folding it must equal observed availability; the
+`invariant_ledger_drift` view checks that continuously. The ledger is append-only by
+trigger.
+
+## 14. Invariants (the scoreboard)
+
+All return zero rows when healthy; tests, lab, reconciliation and the dashboard all
+use the same views:
+
+| Id | Invariant | Severity |
+|---|---|---|
+| I1 | no two live allocations of a resource overlap | CRITICAL |
+| I2 | no pool bucket exceeds capacity | CRITICAL |
+| I3 | no allocation still HELD past its expiry | HIGH |
+| I3b | holds and their allocations agree | HIGH |
+| I4 | ledger fold equals state | CRITICAL |
+| I7 | no resource-span confirmed twice | CRITICAL |
+| I6 | outbox backlog > 60s | MEDIUM (lag, not corruption) |
+
+## 15. Security
+
+- Gateway verifies HS256 JWTs (constant-time); roles `CUSTOMER` / `OPERATOR`;
+  operator routes checked at the edge and the operator's identity passed downstream
+  as `x-actor` for the audit log.
+- Internal APIs require a service token; they are not reachable from outside.
+- Idempotency keys are scoped to the caller; reuse with a different body → 422.
+- Customers cannot read each other's reservations (404, not 403).
+- Webhook HMAC + timestamp window + event-id replay protection.
+- Prices are server-side only.
+- Production refuses to start with development secrets.
+- Append-only audit and ledger tables.
+
+## 16. Consistency guarantees
+
+| Data | Guarantee |
 |---|---|
-| API Gateway | Horizontal scale behind Nginx/ALB |
-| Microservices | Kubernetes Deployments (2+ replicas each) |
-| PostgreSQL | AWS RDS Multi-AZ or CockroachDB |
-| Redis | ElastiCache (Redis 7 Cluster Mode) |
-| Kafka | Confluent Cloud or AWS MSK (3+ brokers) |
-| Elasticsearch | Elastic Cloud or AWS OpenSearch (3-node) |
-| Frontend | Vercel / Netlify / CloudFront + S3 |
-| Secrets | AWS Secrets Manager / HashiCorp Vault |
-| Observability | Datadog / Grafana + Prometheus |
+| Allocation | strong — enforced by the constraint |
+| Event side effects | effectively-once (at-least-once + idempotent consumer) |
+| Search / availability reads | eventually consistent, age exposed |
+| Cross-service workflow | convergent, via the saga; checked by reconciliation |
+
+## 17. Deployment
+
+- **Local**: `npm run up` (infra) + `npm run start` (services on the host).
+- **Compose**: `npm run up:app` builds one image (`SERVICE` build arg) for all eight.
+- **Kubernetes**: `deploy/k8s` — kustomize base with probes (liveness ≠ readiness),
+  PodDisruptionBudgets, HPAs, non-root, read-only root FS, a migration Job.
+  Production-shaped, **not exercised on a cluster**.
+
+## 18. What was deliberately not built
+
+- Two-phase commit (a saga instead).
+- Confluent Schema Registry / Avro (JSON Schema + upcasters instead; see §7).
+- Read replicas (policy: search → replica/cache, allocation → primary only).
+- A real payment provider in the demo path (Razorpay removed; the fake provider
+  exists to inject failures a sandbox cannot).

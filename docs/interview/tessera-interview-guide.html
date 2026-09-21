@@ -1,0 +1,866 @@
+<title>Tessera Interview Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap">
+
+<style>
+/* ============================================================
+   Palette derived from the system's own vocabulary of outcomes:
+   correct (teal), conflict-but-expected (amber), fault (red).
+   Neutrals carry a slight cool bias toward the teal accent.
+   ============================================================ */
+:root {
+  --paper:      #f6f7f8;
+  --surface:    #ffffff;
+  --surface-2:  #eef0f2;
+  --ink:        #171a1d;
+  --ink-2:      #3d444d;
+  --muted:      #656e79;
+  --rule:       #d9dde1;
+  --rule-soft:  #e7eaed;
+
+  --accent:     #1f6b63;   /* correctness */
+  --accent-ink: #12403b;
+  --accent-bg:  #e3f0ee;
+  --warn:       #9a6212;   /* conflict: expected under contention */
+  --warn-bg:    #faf0dd;
+  --fault:      #a3302b;   /* genuine fault */
+  --fault-bg:   #fbe8e6;
+
+  --shadow: 0 1px 2px rgba(23,26,29,.06), 0 8px 24px rgba(23,26,29,.05);
+
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --serif: "IBM Plex Serif", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper:     #101315;
+    --surface:   #171b1e;
+    --surface-2: #1f2428;
+    --ink:       #e8ebed;
+    --ink-2:     #c2c9ce;
+    --muted:     #8d97a0;
+    --rule:      #2b3237;
+    --rule-soft: #232a2e;
+
+    --accent:     #5cbfb2;
+    --accent-ink: #9fd9d0;
+    --accent-bg:  #122b28;
+    --warn:       #d6a45a;
+    --warn-bg:    #2b2317;
+    --fault:      #e08079;
+    --fault-bg:   #2e1a19;
+
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+}
+:root[data-theme="dark"] {
+  --paper:     #101315;
+  --surface:   #171b1e;
+  --surface-2: #1f2428;
+  --ink:       #e8ebed;
+  --ink-2:     #c2c9ce;
+  --muted:     #8d97a0;
+  --rule:      #2b3237;
+  --rule-soft: #232a2e;
+
+  --accent:     #5cbfb2;
+  --accent-ink: #9fd9d0;
+  --accent-bg:  #122b28;
+  --warn:       #d6a45a;
+  --warn-bg:    #2b2317;
+  --fault:      #e08079;
+  --fault-bg:   #2e1a19;
+
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- Layout ---------- */
+.shell {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: 48px;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-inline: 20px;
+  padding-block: 0 96px;
+}
+
+.rail {
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  align-self: start;
+  max-height: 100vh;
+  overflow-y: auto;
+  padding-block: 32px;
+  font-size: 13px;
+}
+.rail-title {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 12px;
+}
+.rail ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.rail a {
+  display: flex;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  color: var(--ink-2);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+}
+.rail a:hover { background: var(--surface-2); color: var(--ink); }
+.rail .n {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  padding-top: 2px;
+  min-width: 16px;
+}
+
+main { min-width: 0; padding-block: 40px 0; }
+
+/* ---------- Masthead ---------- */
+.masthead { border-bottom: 2px solid var(--ink); padding-bottom: 28px; margin-bottom: 40px; }
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 14px;
+}
+h1 {
+  font-family: var(--serif);
+  font-size: clamp(38px, 6.5vw, 62px);
+  line-height: 1.02;
+  font-weight: 600;
+  letter-spacing: -.02em;
+  margin: 0 0 18px;
+  text-wrap: balance;
+}
+.standfirst {
+  font-family: var(--serif);
+  font-size: clamp(17px, 2.2vw, 20px);
+  line-height: 1.5;
+  color: var(--ink-2);
+  max-width: 62ch;
+  margin: 0 0 24px;
+}
+.etymology {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 15px;
+  color: var(--muted);
+  border-left: 2px solid var(--accent);
+  padding-left: 14px;
+  max-width: 58ch;
+  margin: 0;
+}
+
+/* ---------- Sections ---------- */
+section { margin-bottom: 56px; scroll-margin-top: 24px; }
+h2 {
+  font-family: var(--serif);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  margin: 0 0 6px;
+  text-wrap: balance;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+h2 .n {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--accent);
+  font-weight: 500;
+}
+.dek { color: var(--muted); font-size: 15px; margin: 0 0 24px; max-width: 64ch; }
+h3 {
+  font-family: var(--sans);
+  font-size: 16px;
+  font-weight: 600;
+  margin: 28px 0 8px;
+  letter-spacing: -.005em;
+}
+p { max-width: 68ch; margin: 0 0 14px; color: var(--ink-2); }
+strong { color: var(--ink); font-weight: 600; }
+a { color: var(--accent); }
+
+/* ---------- Q&A ---------- */
+.qa { border-top: 1px solid var(--rule-soft); padding-top: 18px; margin-top: 22px; }
+.q {
+  font-family: var(--sans);
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 16px;
+  margin: 0 0 8px;
+  display: flex;
+  gap: 10px;
+  max-width: 68ch;
+}
+.q::before {
+  content: "Q";
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent);
+  padding-top: 3px;
+}
+
+/* ---------- Evidence cards ---------- */
+.evidence {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 22px 0;
+}
+.ev { background: var(--surface); padding: 16px 18px; }
+.ev .label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 6px;
+}
+.ev .value {
+  font-family: var(--mono);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -.02em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+}
+.ev .note { font-size: 12px; color: var(--muted); margin: 5px 0 0; line-height: 1.4; }
+.ev.good .value { color: var(--accent); }
+.ev.bad .value  { color: var(--fault); }
+.ev.warn .value { color: var(--warn); }
+
+/* ---------- Defect → fix → measurement ---------- */
+.finding {
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  margin: 24px 0;
+}
+.finding > div { padding: 18px 20px; }
+.finding .stage {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+.finding .defect { background: var(--fault-bg); border-bottom: 1px solid var(--rule); }
+.finding .defect .stage { color: var(--fault); }
+.finding .cause { border-bottom: 1px solid var(--rule-soft); }
+.finding .cause .stage { color: var(--muted); }
+.finding .fix { background: var(--accent-bg); }
+.finding .fix .stage { color: var(--accent-ink); }
+.finding p { margin: 0; max-width: 66ch; }
+.finding p + p { margin-top: 10px; }
+:root[data-theme="dark"] .finding .fix p,
+:root[data-theme="dark"] .finding .defect p { color: var(--ink); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .finding .fix p,
+  :root:not([data-theme="light"]) .finding .defect p { color: var(--ink); }
+}
+
+/* ---------- Code ---------- */
+.code {
+  background: var(--surface-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: 7px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  margin: 16px 0;
+}
+.code pre {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--ink);
+  white-space: pre;
+}
+.code .cm { color: var(--muted); }
+.code .kw { color: var(--accent); font-weight: 500; }
+code:not(.code code) {
+  font-family: var(--mono);
+  font-size: .89em;
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--ink);
+}
+
+/* ---------- Tables ---------- */
+.tablewrap { overflow-x: auto; margin: 20px 0; border: 1px solid var(--rule); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; background: var(--surface); }
+th, td { padding: 9px 14px; text-align: left; border-bottom: 1px solid var(--rule-soft); white-space: nowrap; }
+th {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+  background: var(--surface-2);
+}
+tbody tr:last-child td { border-bottom: none; }
+td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+tr.highlight td { background: var(--accent-bg); font-weight: 500; }
+tr.danger td { background: var(--fault-bg); }
+:root[data-theme="dark"] tr.highlight td,
+:root[data-theme="dark"] tr.danger td { color: var(--ink); }
+.wrapcell { white-space: normal; min-width: 220px; }
+
+/* ---------- Pills ---------- */
+.pill {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+.pill.built   { background: var(--accent-bg); color: var(--accent-ink); }
+.pill.partial { background: var(--warn-bg); color: var(--warn); }
+.pill.no      { background: var(--surface-2); color: var(--muted); }
+
+/* ---------- Callout ---------- */
+.callout {
+  border-left: 3px solid var(--accent);
+  background: var(--surface);
+  padding: 14px 18px;
+  border-radius: 0 7px 7px 0;
+  margin: 20px 0;
+}
+.callout.caution { border-left-color: var(--warn); }
+.callout p { margin: 0; max-width: 64ch; }
+.callout .tag {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.callout.caution .tag { color: var(--warn); }
+
+/* ---------- Flow diagram ---------- */
+.flow {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.85;
+  background: var(--surface-2);
+  border: 1px solid var(--rule-soft);
+  border-radius: 7px;
+  padding: 16px 18px;
+  overflow-x: auto;
+  margin: 18px 0;
+  color: var(--ink-2);
+}
+.flow b { color: var(--accent); font-weight: 600; }
+.flow i { color: var(--fault); font-style: normal; }
+
+ul { max-width: 68ch; padding-left: 20px; color: var(--ink-2); }
+li { margin-bottom: 7px; }
+
+.footer {
+  border-top: 1px solid var(--rule);
+  padding-top: 22px;
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 68ch;
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 860px) {
+  .shell { grid-template-columns: 1fr; gap: 0; }
+  .rail {
+    position: static;
+    max-height: none;
+    border-bottom: 1px solid var(--rule);
+    padding-block: 20px;
+    margin-bottom: 8px;
+  }
+  .rail ol { flex-direction: row; flex-wrap: wrap; gap: 6px; }
+  .rail a { border: 1px solid var(--rule); border-radius: 20px; padding: 4px 11px; font-size: 12px; }
+  .rail .n { display: none; }
+  main { padding-block: 16px 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+</style>
+
+<div class="shell">
+  <nav class="rail">
+    <p class="rail-title">Contents</p>
+    <ol>
+      <li><a href="#objective"><span class="n">01</span><span>Objective &amp; requirements</span></a></li>
+      <li><a href="#problems"><span class="n">02</span><span>Engineering problems</span></a></li>
+      <li><a href="#architecture"><span class="n">03</span><span>Architecture &amp; why</span></a></li>
+      <li><a href="#apis"><span class="n">04</span><span>APIs</span></a></li>
+      <li><a href="#schema"><span class="n">05</span><span>Database schema</span></a></li>
+      <li><a href="#results"><span class="n">06</span><span>Results &amp; measurement</span></a></li>
+      <li><a href="#tech"><span class="n">07</span><span>Technologies</span></a></li>
+      <li><a href="#tricky"><span class="n">08</span><span>Tricky questions</span></a></li>
+      <li><a href="#challenges"><span class="n">09</span><span>Challenges faced</span></a></li>
+      <li><a href="#behavioural"><span class="n">10</span><span>Behavioural</span></a></li>
+      <li><a href="#scope"><span class="n">11</span><span>Honest scope</span></a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <header class="masthead">
+      <p class="eyebrow">Interview guide · Distributed reservation &amp; inventory infrastructure</p>
+      <h1>Tessera</h1>
+      <p class="standfirst">
+        Allocating scarce inventory to many simultaneous claimants without ever overselling —
+        while payments time out, processes die, and messages arrive twice or out of order.
+      </p>
+      <p class="etymology">
+        A <em>tessera</em> was the Roman admission token: one object, one entry, impossible to
+        duplicate. Holding that guarantee under thousands of concurrent requests is the whole system.
+      </p>
+    </header>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <section id="objective">
+      <h2><span class="n">01</span>Objective, requirements and non-functional requirements</h2>
+      <p class="dek">Start every interview answer here: what it is for, then what it must do, then how well.</p>
+
+      <div class="callout">
+        <p>
+          <strong>The 30-second answer.</strong> Tessera is a distributed reservation and inventory
+          platform. The hard problem is allocating scarce inventory to many concurrent users without
+          ever overselling, while surviving payment failures, crashes and partial outages. The core
+          decision is that <strong>PostgreSQL is the only authority</strong>: a GiST exclusion
+          constraint makes a double-booking impossible to store, so a bug anywhere above the database
+          costs latency, never correctness. I proved it with a lab that runs nine concurrency
+          strategies against the same workload and counts rows in the database afterwards.
+        </p>
+      </div>
+
+      <h3>Objective</h3>
+      <p>
+        Rebuild an IRCTC-style ticket-booking app (formerly “ScaleRail”) into generic reservation
+        infrastructure. Railway seats are the demo; the same engine models hotel rooms over nights,
+        concert seats, appointment slots and rental units — anything that is <em>a resource occupied
+        over an interval</em>.
+      </p>
+
+      <h3>Functional requirements</h3>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Requirement</th><th>Where it lives</th></tr></thead>
+        <tbody>
+          <tr><td class="wrapcell">Search trips between two stations, fuzzy station names, with live availability and fares</td><td class="wrapcell">discovery + pricing</td></tr>
+          <tr><td class="wrapcell">Show a seat map for any segment (e.g. stop 2 → stop 5), not only the full journey</td><td class="wrapcell">inventory-engine <code>segment-availability</code></td></tr>
+          <tr><td class="wrapcell">Hold seats for a limited time, then pay, then issue a booking</td><td class="wrapcell">reservation saga → inventory → payment</td></tr>
+          <tr><td class="wrapcell">Release the seat automatically if payment fails or the hold expires</td><td class="wrapcell">saga compensation + expiry sweeper</td></tr>
+          <tr><td class="wrapcell">Cancel a booking and refund it; resell the freed segment</td><td class="wrapcell">reservation + payment refunds</td></tr>
+          <tr><td class="wrapcell">Queue customers fairly during a flash sale</td><td class="wrapcell">gateway waiting room</td></tr>
+          <tr><td class="wrapcell">Notify the customer when a booking is confirmed or cancelled</td><td class="wrapcell">notification (Kafka consumer)</td></tr>
+          <tr><td class="wrapcell">Operators: block seats, view invariants, inspect and replay dead letters, see a correctness scoreboard</td><td class="wrapcell">gateway RBAC + reconciliation + console <code>/ops</code></td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Non-functional requirements</h3>
+      <div class="tablewrap"><table>
+        <thead><tr><th>NFR</th><th>Target</th><th>How it is met</th></tr></thead>
+        <tbody>
+          <tr><td class="wrapcell"><strong>Correctness</strong></td><td class="wrapcell">Zero oversells, ever, under any concurrency or failure</td><td class="wrapcell">Exclusion constraint + DB-enforced state machines</td></tr>
+          <tr><td class="wrapcell"><strong>Idempotency</strong></td><td class="wrapcell">Any retry is safe; never charge twice</td><td class="wrapcell">Claim-first keys; consumer dedupe in the same transaction</td></tr>
+          <tr><td class="wrapcell"><strong>Durability of events</strong></td><td class="wrapcell">No lost event, even if the broker is down</td><td class="wrapcell">Transactional outbox + relay</td></tr>
+          <tr><td class="wrapcell"><strong>Availability</strong></td><td class="wrapcell">Redis or Elasticsearch down ≠ booking down</td><td class="wrapcell">Redis is advisory; search falls back to PostgreSQL</td></tr>
+          <tr><td class="wrapcell"><strong>Latency under contention</strong></td><td class="wrapcell">Losers fail fast with 409, not time out</td><td class="wrapcell">Sorted row locks before the constraint (p99 186 ms at 1000:1)</td></tr>
+          <tr><td class="wrapcell"><strong>Overload</strong></td><td class="wrapcell">Degrade, don't collapse</td><td class="wrapcell">Token bucket, waiting room, event-loop-lag load shedding</td></tr>
+          <tr><td class="wrapcell"><strong>Auditability</strong></td><td class="wrapcell">Every unit of inventory accounted for</td><td class="wrapcell">Append-only ledger and audit log, enforced by trigger</td></tr>
+          <tr><td class="wrapcell"><strong>Recoverability</strong></td><td class="wrapcell">Crashes never strand a seat or a payment</td><td class="wrapcell">Durable saga with leases; UNKNOWN resolver; reconciliation</td></tr>
+          <tr><td class="wrapcell"><strong>Observability</strong></td><td class="wrapcell">See every stage of a booking</td><td class="wrapcell">Prometheus, Grafana (23 panels), OpenTelemetry → Jaeger, structured logs</td></tr>
+          <tr><td class="wrapcell"><strong>Security</strong></td><td class="wrapcell">No client-set prices, no forged webhooks</td><td class="wrapcell">Server-side pricing; HMAC + timestamp + dedupe; JWT + RBAC</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <section id="problems">
+      <h2><span class="n">02</span>Engineering problems this project solves</h2>
+      <p class="dek">Each row is a classic distributed-systems failure, the naive answer, and what Tessera does instead.</p>
+
+      <div class="tablewrap"><table>
+        <thead><tr><th>Problem</th><th>Naive approach, and how it fails</th><th>Tessera</th></tr></thead>
+        <tbody>
+          <tr><td class="wrapcell"><strong>Overselling under concurrency</strong></td><td class="wrapcell">Read “is it free?”, then insert. Measured: one seat sold to <strong>64</strong> customers.</td><td class="wrapcell">GiST exclusion constraint on <code>(resource, span)</code>: the second row cannot exist.</td></tr>
+          <tr><td class="wrapcell"><strong>Contention collapse</strong></td><td class="wrapcell">Rely on the constraint alone: 609 deadlocks, 30 s p99.</td><td class="wrapcell">Queue on sorted row locks first: 0 deadlocks, 186 ms p99.</td></tr>
+          <tr><td class="wrapcell"><strong>Dual write (DB + Kafka)</strong></td><td class="wrapcell">Commit then publish: a crash in between loses the event.</td><td class="wrapcell">Transactional outbox; relay with leases and per-aggregate ordering.</td></tr>
+          <tr><td class="wrapcell"><strong>Duplicate delivery</strong></td><td class="wrapcell">“Exactly-once Kafka” — only exactly-once inside Kafka.</td><td class="wrapcell">Idempotent consumer: dedupe row written in the same transaction as the effect.</td></tr>
+          <tr><td class="wrapcell"><strong>Out-of-order events</strong></td><td class="wrapcell">Apply in arrival order; stale state overwrites fresh.</td><td class="wrapcell"><code>aggregate_seq</code> guard in <code>projection_offsets</code>.</td></tr>
+          <tr><td class="wrapcell"><strong>Distributed transaction</strong></td><td class="wrapcell">2PC across services, holding locks while a human types a card number.</td><td class="wrapcell">Durable orchestrated saga with compensations.</td></tr>
+          <tr><td class="wrapcell"><strong>Payment timeout</strong></td><td class="wrapcell">Treat as failed and retry: double charge.</td><td class="wrapcell"><code>UNKNOWN</code> state; resolver asks the provider; never re-charges.</td></tr>
+          <tr><td class="wrapcell"><strong>Retry storms / double clicks</strong></td><td class="wrapcell">Check-then-act idempotency: two retries both pass the check.</td><td class="wrapcell">Claim-first: <code>INSERT … ON CONFLICT DO NOTHING</code>, request-hash check.</td></tr>
+          <tr><td class="wrapcell"><strong>Flash-sale thundering herd</strong></td><td class="wrapcell">Rate limit only: random winners, retry storms.</td><td class="wrapcell">Waiting room (FIFO, signed admission tokens) + token bucket, both atomic Lua.</td></tr>
+          <tr><td class="wrapcell"><strong>Silent inconsistency</strong></td><td class="wrapcell">Hope. Or a customer complaint.</td><td class="wrapcell">Reconciliation: 8 checks, grace windows, two sightings, no auto-repair of money.</td></tr>
+          <tr><td class="wrapcell"><strong>Cache stampede</strong></td><td class="wrapcell">TTL expires; 1,000 requests hit the DB at once.</td><td class="wrapcell">Single-flight, jittered TTL, versioned keys, L1 + L2.</td></tr>
+          <tr><td class="wrapcell"><strong>Schema evolution of events</strong></td><td class="wrapcell">Change the payload; old consumers break.</td><td class="wrapcell">JSON Schema contracts, v1→v2 upcasters, per-type reader versions.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <section id="architecture">
+      <h2><span class="n">03</span>Architecture, and why each decision</h2>
+      <p class="dek">Interviewers grade the reasons, not the boxes. Every box here has one.</p>
+
+      <div class="flow">Browser ─► <b>gateway</b> :4000   rate limit · waiting room · JWT · RBAC · load shedding · proxy
+            ├─► <b>discovery</b> :4006     Kafka-fed read model · Elasticsearch + PG fallback · L1/L2 cache
+            ├─► <b>reservation</b> :4002   booking API + durable saga (hold → pay → confirm)
+            │      ├─► <b>pricing</b> :4007           server-side fares
+            │      ├─► <b>inventory-engine</b> :4001  THE AUTHORITY: constraint, ledger, expiry
+            │      └─► <b>payment</b> :4003           state machine with UNKNOWN; fault-injecting provider
+            ├─► <b>reconciliation</b> :4004  cross-service checks · safe repair · scoreboard
+            └─► <b>notification</b> :4005    Kafka consumer · exactly-once effect · DLQ + replay
+
+<i>PostgreSQL 16 (one DB per service) · Kafka KRaft · Redis 7 · Elasticsearch 8
+Prometheus · Grafana · OpenTelemetry → Jaeger · Docker Compose · Kubernetes manifests</i></div>
+
+      <h3>The life of one booking</h3>
+      <ol>
+        <li><strong>Gateway</strong> checks the token bucket, the waiting-room admission token, the JWT, and event-loop lag.</li>
+        <li><strong>Reservation</strong> claims the idempotency key, asks <strong>pricing</strong> for a quote (the client's price is ignored), stores the reservation + saga row + outbox event in one transaction, and returns <code>202</code>.</li>
+        <li>The <strong>saga worker</strong> claims the saga (<code>SKIP LOCKED</code> + lease) and calls <strong>inventory-engine</strong> <code>/internal/reserve</code>.</li>
+        <li>Inventory takes sorted row locks on the seats, lazily expires stale holds, inserts <code>HELD</code> allocations — the constraint is the final word — writes ledger rows and an outbox event.</li>
+        <li>The saga calls <strong>payment</strong>. Authorised → confirm the hold → issue a booking (<code>TSR-…</code>). Declined → release the hold (compensation). Timeout → <code>PAYMENT_UNKNOWN</code>; the resolver asks the provider.</li>
+        <li>The outbox relay publishes to Kafka. <strong>Notification</strong> sends exactly one message; <strong>discovery</strong> marks the trip dirty and refreshes availability.</li>
+        <li><strong>Reconciliation</strong> later checks every service agrees, and flags anything that doesn't.</li>
+      </ol>
+
+      <h3>Decisions and their reasons</h3>
+      <div class="qa"><p class="q">Why is PostgreSQL the source of truth, not Redis?</p>
+        <p>Allocation is money. PostgreSQL gives durable, transactional, constraint-checked writes; Redis gives speed with weaker durability and failover semantics (a lock can be granted twice across a failover). In the lab the Redis lock <em>did</em> leak once in 1,000, and the constraint rejected it. So Redis is a load filter; the database is the judge.</p></div>
+      <div class="qa"><p class="q">Why an exclusion constraint instead of application checks?</p>
+        <p>An application check is only as good as every code path that remembers it — including migration scripts and a hand-run <code>UPDATE</code> at 3 a.m. A constraint applies to all of them. Half-open <code>int4range</code> spans also model segments exactly: alighting at stop 5 and boarding at stop 5 don't overlap.</p></div>
+      <div class="qa"><p class="q">Why lock rows before inserting, if the constraint already protects you?</p>
+        <p>Measured: the constraint alone deadlocks under heavy contention (GiST inserts then scans, and waiters form cycles). Sorted <code>SELECT … FOR UPDATE</code> gives contention an orderly queue. The lock is for throughput; the constraint is for correctness. Forget the lock and it gets slow, not wrong.</p></div>
+      <div class="qa"><p class="q">Why a saga and not two-phase commit?</p>
+        <p>2PC holds locks across every participant, including a payment provider that doesn't speak XA, for as long as a customer takes to pay. A saga accepts brief inconsistency (a seat is held, not sold) in exchange for no cross-service locks, and every step has a compensation. Reconciliation covers what the saga can miss.</p></div>
+      <div class="qa"><p class="q">Why is the saga a table and not a call stack?</p>
+        <p>If the process dies mid-booking, an in-memory saga dies with it and the seat is stranded. A row with a state, a lease and <code>next_run_at</code> survives crashes, can be claimed by any worker, and every transition is a compare-and-swap on the expected state so two workers can't both advance it.</p></div>
+      <div class="qa"><p class="q">Why an outbox and not publish-after-commit?</p>
+        <div class="flow">COMMIT; publish()   <i>→ crash between them loses the event</i>
+publish(); COMMIT   <i>→ rollback leaves a lie on the bus</i></div>
+        <p>The event row commits or vanishes with the business change. It trades a few ms of delay for “never lost” — proven when Kafka was unreachable for hours and 931 events waited and then published.</p></div>
+      <div class="qa"><p class="q">Why one database per service?</p>
+        <p>Independent schema evolution and blast radius. No cross-database joins; reconciliation reads others read-only as the one documented exception. Locally they share one PostgreSQL instance for convenience.</p></div>
+      <div class="qa"><p class="q">Why Elasticsearch <em>and</em> a PostgreSQL fallback?</p>
+        <p>Search is discovery, not truth; it can be slightly stale and must never block booking. Elasticsearch gives fuzzy matching and speed; a circuit breaker falls back to PostgreSQL <code>word_similarity</code> so search degrades instead of failing. The seat map and the hold always read inventory directly.</p></div>
+      <div class="qa"><p class="q">Why a separate pricing service?</p>
+        <p>The client once sent the price. Now the server quotes <code>base × max(0.3, span share) × demand tier</code>, and the quoted price is locked onto the hold — so a tampered request cannot change what is charged.</p></div>
+      <div class="qa"><p class="q">Why a waiting room in addition to a rate limiter?</p>
+        <p>A rate limiter protects the server; it hands out access randomly, which rewards whoever retries hardest. A waiting room protects fairness: FIFO position, a signed admission token, and a fixed admission rate the backend can sustain.</p></div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <section id="apis">
+      <h2><span class="n">04</span>The APIs, and how to explain them</h2>
+      <p class="dek">All public traffic goes through the gateway at <code>:4000</code> under <code>/api</code>. Every mutating call takes an <code>Idempotency-Key</code> header.</p>
+
+      <div class="tablewrap"><table>
+        <thead><tr><th>Endpoint</th><th>What it does</th><th>What to say about it</th></tr></thead>
+        <tbody>
+          <tr><td class="wrapcell"><code>POST /api/auth/login</code></td><td class="wrapcell">Issues an HS256 JWT; role CUSTOMER or OPERATOR</td><td class="wrapcell">Stateless auth at the edge; services trust an internal token + <code>x-actor</code></td></tr>
+          <tr><td class="wrapcell"><code>GET /api/search?from&amp;to&amp;date</code></td><td class="wrapcell">Trips with per-class availability and fares</td><td class="wrapcell">Read model, eventually consistent, labelled as such</td></tr>
+          <tr><td class="wrapcell"><code>GET /api/stations?q=</code></td><td class="wrapcell">Fuzzy station autocomplete</td><td class="wrapcell"><code>kanpr</code> finds “Kanpur Central”</td></tr>
+          <tr><td class="wrapcell"><code>GET /api/events/:id/availability?from&amp;to</code></td><td class="wrapcell">Seat map for a segment</td><td class="wrapcell">Reads the authority directly — never cached for a hold decision</td></tr>
+          <tr><td class="wrapcell"><code>POST /api/pricing/quote</code></td><td class="wrapcell">Server-side fare</td><td class="wrapcell">The only price the system will charge</td></tr>
+          <tr><td class="wrapcell"><code>POST /api/reservations</code></td><td class="wrapcell">Start a booking → <code>202 Accepted</code> + quote</td><td class="wrapcell">Asynchronous by design: the saga does the work; the client polls or watches</td></tr>
+          <tr><td class="wrapcell"><code>GET /api/reservations/:id</code></td><td class="wrapcell">State + saga step history</td><td class="wrapcell">The console renders this live</td></tr>
+          <tr><td class="wrapcell"><code>POST /api/reservations/:id/cancel</code></td><td class="wrapcell">Cancel and refund</td><td class="wrapcell">Idempotent; frees the segment for resale</td></tr>
+          <tr><td class="wrapcell"><code>POST /api/waiting-room/:eventId/join</code> · <code>GET …/status</code></td><td class="wrapcell">Queue position → signed admission token</td><td class="wrapcell">Fairness, not just protection</td></tr>
+          <tr><td class="wrapcell"><code>POST /webhooks/provider</code> (payment :4003)</td><td class="wrapcell">Provider callback, raw body</td><td class="wrapcell">HMAC + timestamp window + dedupe; a bad signature changes nothing</td></tr>
+          <tr><td class="wrapcell"><code>/api/ops/*</code> (OPERATOR)</td><td class="wrapcell">Invariants, scoreboard, issues, reconciliation runs, discovery and notification status</td><td class="wrapcell">RBAC at the gateway</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Internal service APIs (service token only)</h3>
+      <p><strong>inventory-engine:</strong> <code>POST /internal/reserve</code>, <code>/internal/confirm</code>, <code>/internal/release</code>, <code>/internal/cancel-booking</code>; <code>POST /admin/resources/:id/block|unblock</code>; <code>GET /admin/invariants</code>; <code>GET /v1/events/:id/segment-availability</code>, <code>/adjacent</code>, <code>/v1/holds/:id</code>.<br><strong>payment:</strong> <code>POST /internal/charge</code>, <code>/internal/payments/:id/resolve</code>, <code>/internal/payments/:id/refund</code>; <code>POST /admin/provider-mode</code> (fault injection).</p>
+
+      <h3>Events (Kafka, via outbox)</h3>
+      <p><code>inventory.events</code>: <code>hold.created</code>, <code>hold.expired</code>, <code>hold.released</code>, <code>allocation.confirmed</code>, … · <code>booking.events</code>: <code>booking.confirmed</code> (v2, upcast from v1), <code>booking.cancelled</code>, … · <code>payment.events</code>. Each carries <code>event_id</code>, <code>aggregate_id</code>, <code>aggregate_seq</code> and a schema version. Full list in <code>docs/API.md</code>.</p>
+
+      <h3>Status codes, as a story</h3>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="num">202</td><td class="wrapcell">Accepted; the saga will finish it</td></tr>
+          <tr><td class="num">409</td><td class="wrapcell">Expected contention — someone else got the seat. Never a 500.</td></tr>
+          <tr><td class="num">422</td><td class="wrapcell">Same idempotency key, different body</td></tr>
+          <tr><td class="num">429</td><td class="wrapcell">Rate limited or not yet admitted from the waiting room</td></tr>
+          <tr><td class="num">503</td><td class="wrapcell">Shedding load (event-loop lag) — retry later with <code>Retry-After</code></td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="callout"><p><strong>How to walk an interviewer through the API:</strong> “The client never books synchronously. <code>POST /reservations</code> records intent and returns 202 with a server-computed quote. A durable saga then holds, charges and confirms, and the client watches the state. Every write is idempotent, so a double click or a network retry is the same request. A 409 means you lost a fair race — it's a normal outcome, not an error.”</p></div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <section id="schema">
+      <h2><span class="n">05</span>The database schema</h2>
+      <p class="dek">PostgreSQL 16, one database per service. The constraints <em>are</em> the business rules.</p>
+
+      <h3>The central table: <code>allocations</code> (inventory)</h3>
+      <div class="code"><pre>allocations(id, resource_id, span <span class="kw">int4range</span>, state, hold_id, booking_id, expires_at, price_cents, reason)
+
+<span class="kw">EXCLUDE USING</span> gist (resource_id <span class="kw">WITH</span> =, span <span class="kw">WITH</span> &amp;&amp;)
+  <span class="kw">WHERE</span> (state <span class="kw">IN</span> ('HELD','CONFIRMED','BLOCKED'))   <span class="cm">-- never oversell</span>
+<span class="kw">CHECK</span> held ⇒ expires_at <span class="kw">IS NOT NULL</span>                   <span class="cm">-- a hold always expires</span>
+<span class="kw">CHECK</span> confirmed ⇒ booking_id <span class="kw">IS NOT NULL</span>               <span class="cm">-- every sale is attributable</span>
+<span class="kw">TRIGGER</span> insert guard: only HELD or BLOCKED                <span class="cm">-- no direct CONFIRMED</span>
+<span class="kw">TRIGGER</span> transition guard: HELD→CONFIRMED|EXPIRED|RELEASED|CANCELLED, CONFIRMED→CANCELLED</pre></div>
+
+      <div class="tablewrap"><table>
+        <thead><tr><th>Database</th><th>Tables</th><th>Notable rules</th></tr></thead>
+        <tbody>
+          <tr><td class="wrapcell"><strong>inventory</strong></td><td class="wrapcell">inventory_events, span_points, resource_groups, inventory_resources, holds, allocations, inventory_pools, pool_buckets, inventory_ledger</td><td class="wrapcell">Exclusion constraint; <code>held + confirmed ≤ capacity</code> for pools; append-only ledger; 8 invariant views</td></tr>
+          <tr><td class="wrapcell"><strong>reservation</strong></td><td class="wrapcell">reservations, reservation_items, bookings, sagas, saga_steps</td><td class="wrapcell">Saga transition trigger (18 states); unique <code>TSR-…</code> reference; append-only steps</td></tr>
+          <tr><td class="wrapcell"><strong>payment</strong></td><td class="wrapcell">payments, refunds, provider_events, signature_failures</td><td class="wrapcell">No path out of FAILED; refunds ≤ captured; unique provider event id (replay protection)</td></tr>
+          <tr><td class="wrapcell"><strong>reconciliation</strong></td><td class="wrapcell">recon_runs, reconciliation_issues, repair_log, scoreboard_snapshots</td><td class="wrapcell">Unique issue per entity; append-only repair log</td></tr>
+          <tr><td class="wrapcell"><strong>notification</strong></td><td class="wrapcell">notifications</td><td class="wrapcell">Unique <code>(source_event_id, template)</code> — second guard against duplicates</td></tr>
+          <tr><td class="wrapcell"><strong>discovery</strong></td><td class="wrapcell">trips, trip_stops, trip_segments, dirty_events</td><td class="wrapcell">Trigram index; durable refresh queue with attempts</td></tr>
+          <tr><td class="wrapcell"><strong>every DB</strong></td><td class="wrapcell">outbox_events, aggregate_sequences, idempotency_keys, processed_events, projection_offsets, consumer_attempts, dead_letters, audit_log</td><td class="wrapcell">The shared correctness primitives</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="qa"><p class="q">Why plain SQL migrations and not an ORM?</p>
+        <p>Exclusion constraints, range types, partial indexes, triggers and append-only guards are not expressible in Prisma or most ORMs. Migrations are checksummed (editing an applied one is rejected) and run under an advisory lock so two services starting together can't race.</p></div>
+      <div class="qa"><p class="q">Why per-aggregate sequences instead of one global sequence?</p>
+        <p>Ordering only matters within an aggregate (one booking, one hold). A per-aggregate row avoids a single hot counter shared by every write.</p></div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <section id="results">
+      <h2><span class="n">06</span>Results, and how they were measured</h2>
+      <p class="dek">The rule: count rows in the database afterwards. Never count HTTP 200s.</p>
+
+      <div class="evidence">
+        <div class="ev bad"><p class="label">Naive strategy</p><p class="value">64</p><p class="note">customers sold one seat</p></div>
+        <div class="ev good"><p class="label">Production path</p><p class="value">0</p><p class="note">oversells at 1000 users : 1 seat</p></div>
+        <div class="ev warn"><p class="label">Throughput fix</p><p class="value">86×</p><p class="note">9.6 → 575 req/s, 609 → 0 deadlocks</p></div>
+        <div class="ev good"><p class="label">Outbox under outage</p><p class="value">931</p><p class="note">events held, all published, 0 lost</p></div>
+      </div>
+
+      <h3>Contention Lab — 1,000 users, 1 seat</h3>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Strategy</th><th>Sold</th><th>p99</th><th>req/s</th></tr></thead>
+        <tbody>
+          <tr><td class="wrapcell">A — naive read-check-write</td><td class="num">64</td><td class="num">623 ms</td><td class="num">1,007</td></tr>
+          <tr><td class="wrapcell">F — constraint alone</td><td class="num">1</td><td class="num">30,008 ms</td><td class="num">9.6</td></tr>
+          <tr class="highlight"><td class="wrapcell">F2 — sorted row lock + constraint (production)</td><td class="num">1</td><td class="num">186 ms</td><td class="num">575</td></tr>
+          <tr><td class="wrapcell">Redis lock + constraint</td><td class="num">1*</td><td class="num">10.6 ms</td><td class="num">11,364</td></tr>
+        </tbody>
+      </table></div>
+      <p>* The Redis lock let a second request through once; the constraint rejected it (SQLSTATE 23P01). Full results, including strategies B–H, are in <code>docs/benchmarks/RESULTS.md</code>.</p>
+
+      <h3>How it was measured</h3>
+      <ul>
+        <li><strong>Warm connections + a start barrier</strong> so 1,000 virtual users really fire together (the first harness serialised them and reported a broken strategy as safe).</li>
+        <li><strong>Ground truth from the database</strong>: count live allocations per seat after each run; latency samples and <code>pg_stat_activity</code> wait events recorded per run.</li>
+        <li><strong>Pre-registered hypotheses</strong> in <code>HYPOTHESES.md</code>, committed before running; two were wrong and remain published.</li>
+        <li>Every result file records seed (42), git commit and a dirty-tree flag.</li>
+      </ul>
+
+      <h3>Test frameworks and suites</h3>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Layer</th><th>Tool</th><th>What it proves</th></tr></thead>
+        <tbody>
+          <tr><td class="wrapcell">Integration (40 tests)</td><td class="wrapcell"><code>node:test</code> against real PostgreSQL 16 + Redis 7 — no mocks</td><td class="wrapcell">Constraint, triggers, idempotency races, outbox, DLQ, saga paths, payment UNKNOWN, admission, reconciliation</td></tr>
+          <tr><td class="wrapcell">End-to-end (31 checks)</td><td class="wrapcell"><code>bench/src/e2e.js</code> against all 8 running services</td><td class="wrapcell">50 users for 1 seat → exactly 1 wins; idempotent replay; decline releases; timeout → one charge; segment resale; forged webhook rejected</td></tr>
+          <tr><td class="wrapcell">Concurrency lab</td><td class="wrapcell"><code>lab/</code> CLI, 9 strategies</td><td class="wrapcell">Relative safety and throughput under contention</td></tr>
+          <tr><td class="wrapcell">Chaos</td><td class="wrapcell"><code>scripts/chaos.sh</code> (Kafka, Redis, payment faults) + failpoints</td><td class="wrapcell">Degradation without incorrectness</td></tr>
+          <tr><td class="wrapcell">Load</td><td class="wrapcell">k6 flash-sale script</td><td class="wrapcell">Written; results not yet recorded</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Observability</h3>
+      <ul>
+        <li><strong>Prometheus</strong> metrics from every service: reserve outcomes and latency, saga states, outbox backlog, consumer lag, DLQ size, admission decisions, cache hit rate.</li>
+        <li><strong>Grafana</strong> dashboard (23 panels), provisioned from <code>deploy/grafana</code>.</li>
+        <li><strong>OpenTelemetry</strong> tracing exported to <strong>Jaeger</strong> when <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> is set.</li>
+        <li>Structured JSON logs (pino) with request and trace ids; the <strong>correctness scoreboard</strong> and invariant endpoints in the console.</li>
+      </ul>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <section id="tech">
+      <h2><span class="n">07</span>Technologies, and why each</h2>
+      <p class="dek">Be ready to justify every one — and to name the alternative you rejected.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Technology</th><th>Role</th><th>Why this, not the alternative</th></tr></thead>
+        <tbody>
+          <tr><td class="wrapcell"><strong>Node.js 22 / Express 5</strong></td><td class="wrapcell">All 8 services, npm workspaces</td><td class="wrapcell">I/O-bound services; one shared correctness package; event-loop lag is a natural load-shedding signal</td></tr>
+          <tr><td class="wrapcell"><strong>PostgreSQL 16</strong></td><td class="wrapcell">Authority for everything</td><td class="wrapcell">Range types + GiST exclusion constraints; MySQL has no equivalent</td></tr>
+          <tr><td class="wrapcell"><strong>Kafka (KRaft)</strong></td><td class="wrapcell">Event bus</td><td class="wrapcell">Ordered per partition (key = aggregate), replayable; KRaft removes ZooKeeper</td></tr>
+          <tr><td class="wrapcell"><strong>Redis 7</strong></td><td class="wrapcell">Token bucket, waiting room, L2 cache</td><td class="wrapcell">Atomic Lua scripts; deliberately non-authoritative</td></tr>
+          <tr><td class="wrapcell"><strong>Elasticsearch 8</strong></td><td class="wrapcell">Search</td><td class="wrapcell">Fuzzy matching at scale; PostgreSQL fallback behind a circuit breaker</td></tr>
+          <tr><td class="wrapcell"><strong>React + Vite + Tailwind + Zustand</strong></td><td class="wrapcell">Console</td><td class="wrapcell">Small, fast build; Zustand avoids Redux ceremony</td></tr>
+          <tr><td class="wrapcell"><strong>Prometheus, Grafana, OpenTelemetry, Jaeger</strong></td><td class="wrapcell">Metrics, dashboards, traces</td><td class="wrapcell">Open standards; a trace follows a booking across services</td></tr>
+          <tr><td class="wrapcell"><strong>JSON Schema (ajv)</strong></td><td class="wrapcell">Event contracts</td><td class="wrapcell">Validated at write time; upcasters instead of a Schema Registry</td></tr>
+          <tr><td class="wrapcell"><strong>Docker Compose, Kubernetes (kustomize)</strong></td><td class="wrapcell">Local stack; production-shaped manifests</td><td class="wrapcell">One image for all services, <code>SERVICE</code> build arg</td></tr>
+          <tr><td class="wrapcell"><strong>node:test, k6</strong></td><td class="wrapcell">Tests, load</td><td class="wrapcell">Zero-dependency test runner; k6 for scripted HTTP load</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <section id="tricky">
+      <h2><span class="n">08</span>Tricky questions an interviewer may ask</h2>
+      <p class="dek">Short, honest answers. If you don't know, say what you'd measure.</p>
+
+      <div class="qa"><p class="q">“If Kafka guarantees exactly-once, why do you need dedupe?”</p>
+        <p>Kafka's exactly-once is inside Kafka (producer → topic → consumer offset). My side effect is a database write or an email, outside Kafka. So I make the effect idempotent: the <code>processed_events</code> row is written in the same transaction as the effect.</p></div>
+      <div class="qa"><p class="q">“What happens if the relay publishes and crashes before marking the row published?”</p>
+        <p>It publishes again: at-least-once. That's why consumers dedupe by <code>event_id</code>. Duplicates are cheap; losses are not.</p></div>
+      <div class="qa"><p class="q">“What if the hold expires while the payment is being authorised?”</p>
+        <p>Confirm checks the hold is still <code>ACTIVE</code> in the same transaction. If it expired, confirm fails, the saga refunds/voids the payment, and the reservation fails cleanly. Reconciliation independently flags any “paid but not booked”.</p></div>
+      <div class="qa"><p class="q">“Your expiry sweeper is down. Are seats stuck?”</p>
+        <p>No. Reserve lazily expires stale holds on the seats it's locking, inside its own transaction. The sweeper is for freshness, not correctness.</p></div>
+      <div class="qa"><p class="q">“Why not just use <code>SERIALIZABLE</code>?”</p>
+        <p>It would be correct but, under 1,000:1 contention, most transactions would abort with serialization failures and retry. A declarative constraint rejects exactly the conflicting row and nothing else; the row lock makes the queue orderly.</p></div>
+      <div class="qa"><p class="q">“Clock skew — whose clock decides expiry?”</p>
+        <p>The database's (<code>now()</code>), one clock. Redis TTLs are only cleanup hints.</p></div>
+      <div class="qa"><p class="q">“How does this scale to 10× traffic?”</p>
+        <p>Contention is per seat, not global, so different trains don't compete. Services are stateless and horizontally scalable; saga workers use <code>SKIP LOCKED</code> + leases (verified correct with two workers). The next bottleneck is write throughput on one PostgreSQL — partition inventory by event. I haven't measured a scaling curve, and I'd say so.</p></div>
+      <div class="qa"><p class="q">“A customer is charged but has no booking. Walk me through it.”</p>
+        <p>Reconciliation's “captured payment without booking” check finds it after a grace window, requires two sightings, and raises a money issue for a human — it never auto-refunds, because an automated refund loop that misfires is worse than the original problem.</p></div>
+      <div class="qa"><p class="q">“Why is a 409 not an error?”</p>
+        <p>Under contention, losing is the expected outcome for 999 of 1,000 users. Returning it fast (not after a 30 s timeout) is the whole point of the row-lock queue.</p></div>
+      <div class="qa"><p class="q">“What's the weakest part of the system?”</p>
+        <p>One PostgreSQL instance is a single point of failure locally, and the Kubernetes manifests haven't been run on a real cluster. In production I'd use a managed HA PostgreSQL with synchronous replicas.</p></div>
+      <div class="qa"><p class="q">“How is an idempotency key different from a dedupe id?”</p>
+        <p>An idempotency key comes from the client and protects an API call (with a request hash so the same key with a different body is rejected). A dedupe id is the event's id and protects a consumer.</p></div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <section id="challenges">
+      <h2><span class="n">09</span>Challenges faced, and how they were resolved</h2>
+      <p class="dek">Situation → cause → action → result. Every one of these happened.</p>
+
+      <div class="tablewrap"><table>
+        <thead><tr><th>Challenge</th><th>Cause</th><th>Resolution</th></tr></thead>
+        <tbody>
+          <tr><td class="wrapcell"><strong>Benchmark said the broken strategy was safe</strong></td><td class="wrapcell">Lazy connections staggered users; nothing ran concurrently</td><td class="wrapcell">Warm connections + start barrier → naive oversold to 64</td></tr>
+          <tr><td class="wrapcell"><strong>Correct design, 86× too slow</strong></td><td class="wrapcell">GiST insert-then-scan waits formed deadlock cycles (609)</td><td class="wrapcell">Sorted row locks first → 0 deadlocks, 186 ms p99</td></tr>
+          <tr><td class="wrapcell"><strong>Redis lock leaked</strong></td><td class="wrapcell">A lock is not a fence</td><td class="wrapcell">Constraint caught it; Redis demoted to load filter</td></tr>
+          <tr><td class="wrapcell"><strong>Ledger showed drift on correct data</strong></td><td class="wrapcell">No opening balance; an inner join hid resources</td><td class="wrapcell"><code>CAPACITY_ADDED</code> entries; drift view starts from resources</td></tr>
+          <tr><td class="wrapcell"><strong>Direct CONFIRMED insert possible</strong></td><td class="wrapcell">Found by probing my own schema</td><td class="wrapcell">Insert trigger: HELD or BLOCKED only</td></tr>
+          <tr><td class="wrapcell"><strong>Saga illegal transition with two workers</strong></td><td class="wrapcell">Lease released mid-step; second worker took over</td><td class="wrapcell">Keep lease across step; compare-and-swap transitions</td></tr>
+          <tr><td class="wrapcell"><strong>Sagas stuck one step short</strong></td><td class="wrapcell">RELEASED excluded from claim; HOLD_FAILED never settled</td><td class="wrapcell">Fixed; tests assert the final state</td></tr>
+          <tr><td class="wrapcell"><strong>Kafka unreachable for hours</strong></td><td class="wrapcell">Image pull TLS timeouts</td><td class="wrapcell">Outbox held 931 events; all published on recovery</td></tr>
+          <tr><td class="wrapcell"><strong>Healthcheck lied</strong></td><td class="wrapcell">Probed the wrong listener</td><td class="wrapcell">Probe <code>localhost:9092</code></td></tr>
+          <tr><td class="wrapcell"><strong>Poison refresh queue</strong></td><td class="wrapcell">404 rows retried forever at the head</td><td class="wrapcell">404 = remove; failures requeued with attempts, max 5</td></tr>
+          <tr><td class="wrapcell"><strong>Search stuck on fallback</strong></td><td class="wrapcell">One cold timeout marked ES dead forever</td><td class="wrapcell">Circuit breaker with retry; <code>word_similarity</code></td></tr>
+          <tr><td class="wrapcell"><strong>Timeouts not applied to first query</strong></td><td class="wrapcell">Un-awaited <code>SET</code> in a connect listener</td><td class="wrapcell">Startup options on the connection</td></tr>
+          <tr><td class="wrapcell"><strong>Security holes in the original</strong></td><td class="wrapcell">Bad signature → FAILED; client-sent price</td><td class="wrapcell">Signature failures change nothing; server-side pricing</td></tr>
+          <tr><td class="wrapcell"><strong>Windows dev friction</strong></td><td class="wrapcell">No <code>pkill</code>, pipes held open, escaped <code>$name</code> in log paths, port clashes</td><td class="wrapcell">PowerShell <code>Start-Process</code> start script; ports 9091/3002/16687</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <section id="behavioural">
+      <h2><span class="n">10</span>Behavioural questions — ready answers</h2>
+      <p class="dek">Each maps to a real challenge above.</p>
+
+      <div class="qa"><p class="q">Tell me about a time you were wrong.</p>
+        <p>I wrote predictions down before benchmarking. I thought pessimistic locking would be slow and the constraint alone would be fine. The constraint alone deadlocked 609 times out of 1,000. I changed the production design and kept the wrong prediction published next to the result.</p></div>
+      <div class="qa"><p class="q">Tell me about your hardest bug.</p>
+        <p>An “illegal saga transition” that only appeared with two workers. A lease was released when a step <em>started</em>, so another worker could take the saga mid-step. I reproduced it on purpose, kept the lease across the step, made transitions compare-and-swap, and now run e2e with two workers.</p></div>
+      <div class="qa"><p class="q">Tell me about a time your testing misled you.</p>
+        <p>My benchmark said a naive strategy never oversold. That contradicted the mechanism, so I distrusted the result, found the harness wasn't creating concurrency, fixed it, and the same strategy then sold one seat 64 times.</p></div>
+      <div class="qa"><p class="q">How do you handle an ambiguous, large requirement?</p>
+        <p>The brief was about 90 sections. I turned it into phases with exit gates, ordered correctness first, and marked anything I couldn't build properly as “designed, not built” rather than faking it.</p></div>
+      <div class="qa"><p class="q">Describe a trade-off.</p>
+        <p>Saga over 2PC: temporary inconsistency in exchange for no locks held across a human paying — backed by reconciliation. Or one Docker image for eight services: slightly bigger, identical dependencies everywhere.</p></div>
+      <div class="qa"><p class="q">When did you push back?</p>
+        <p>Auto-repair of money issues would have been easy. I refused: a misfiring automatic refund is harder to undo than the inconsistency it fixes. Money issues go to a human with a recommendation.</p></div>
+      <div class="qa"><p class="q">Tell me about a failure under real conditions.</p>
+        <p>Kafka was unreachable for hours during development. Nothing was lost: 931 events waited in the outbox and published on recovery, matching topic offsets exactly.</p></div>
+      <div class="qa"><p class="q">How do you prioritise?</p>
+        <p>Correctness → consistency → failure recovery → observability → performance → scale. The engine and its proof came before the frontend.</p></div>
+      <div class="qa"><p class="q">What would you do differently?</p>
+        <p>Validate the concurrency harness against a known-broken strategy before measuring anything; load-test through the gateway earlier; isolate test data in its own database.</p></div>
+      <div class="qa"><p class="q">How do you make sure your work is correct?</p>
+        <p>Put the rule in the database, share one set of invariants between tests, benchmark and reconciliation, and assert on stored rows rather than responses.</p></div>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <section id="scope">
+      <h2><span class="n">11</span>Honest scope</h2>
+      <p class="dek">Volunteer the gaps. It makes everything else credible.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Area</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td class="wrapcell">Inventory engine, saga, payments, reconciliation, admission</td><td class="wrapcell">Built — 40 integration tests</td></tr>
+          <tr><td class="wrapcell">8 services, gateway RBAC, React console</td><td class="wrapcell">Built — 31 end-to-end checks</td></tr>
+          <tr><td class="wrapcell">Outbox → Kafka, idempotent consumers, DLQ + replay, versioned events</td><td class="wrapcell">Built — survived a real broker outage</td></tr>
+          <tr><td class="wrapcell">Search (ES + PG fallback), pricing, observability</td><td class="wrapcell">Built</td></tr>
+          <tr><td class="wrapcell">k6 flash-sale script</td><td class="wrapcell">Written; results not recorded</td></tr>
+          <tr><td class="wrapcell">Kubernetes manifests</td><td class="wrapcell">Production-shaped; not run on a cluster</td></tr>
+          <tr><td class="wrapcell">Horizontal scaling</td><td class="wrapcell">Two workers verified correct; no scaling curve</td></tr>
+          <tr><td class="wrapcell">Schema Registry / Avro</td><td class="wrapcell">Deliberately not built — JSON Schema + upcasters</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Questions to ask them</h3>
+      <ul>
+        <li>“How do you detect a booking that was paid for but never issued — automatically, or when a customer complains?”</li>
+        <li>“When your payment provider times out, what does your system assume?”</li>
+        <li>“Do your load tests assert on database state afterwards, or on response codes?”</li>
+      </ul>
+    </section>
+
+    <footer class="footer">
+      <p>
+        Tessera · distributed reservation &amp; inventory infrastructure. Every figure on this page came
+        from a single developer laptop with PostgreSQL 16 and Redis 7 in Docker, seed 42. Numbers
+        describe relative behaviour between strategies, not production capacity. Source:
+        github.com/X-Rachit-X/Distributed-Inventory.
+      </p>
+    </footer>
+  </main>
+</div>

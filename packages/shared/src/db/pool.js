@@ -53,19 +53,20 @@ function createPool(opts = {}) {
           idleTimeoutMillis: cfg.idleTimeoutMillis,
           connectionTimeoutMillis: cfg.connectionTimeoutMillis,
           application_name: `tessera-${name}`,
-     });
-
-     // Apply guardrails to every physical connection as it is created.
-     pool.on('connect', (client) => {
-          client
-               .query(
-                    `SET statement_timeout = ${Number(cfg.statementTimeoutMs)};
-                     SET lock_timeout = ${Number(cfg.lockTimeoutMs)};
-                     SET idle_in_transaction_session_timeout = ${Number(cfg.idleInTransactionTimeoutMs)};`
-               )
-               .catch(() => {
-                    /* The connection is about to be discarded by pg on error; nothing to do. */
-               });
+          // Guardrails are passed as startup parameters, so the server applies
+          // them before the connection is handed to anyone.
+          //
+          // The first version ran `SET statement_timeout ...` from a 'connect'
+          // listener without awaiting it. pg hands the client to the caller at
+          // the same moment, so the caller's first query could overlap the SET:
+          // pg logged "client.query() when the client is already executing a
+          // query", and for that first query the timeouts were not guaranteed
+          // to be in force yet. Startup options have no such window.
+          options: [
+               `-c statement_timeout=${Number(cfg.statementTimeoutMs)}`,
+               `-c lock_timeout=${Number(cfg.lockTimeoutMs)}`,
+               `-c idle_in_transaction_session_timeout=${Number(cfg.idleInTransactionTimeoutMs)}`,
+          ].join(' '),
      });
 
      pool.on('error', (err) => {

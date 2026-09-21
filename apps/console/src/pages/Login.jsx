@@ -18,7 +18,7 @@ export default function Login() {
           try {
                const { data } = await api.login(email);
                signIn({ ...data, email });
-               navigate(location.state?.from || '/trains', { replace: true });
+               navigate(location.state?.from || '/search', { replace: true });
           } catch (err) {
                setError(err.message);
           } finally {
@@ -30,8 +30,9 @@ export default function Login() {
           <div className="max-w-sm mx-auto mt-16">
                <h1 className="text-2xl font-semibold mb-1">Sign in</h1>
                <p className="text-sm text-slate-400 mb-6">
-                    Any email works. This console demonstrates inventory correctness, not
-                    credential handling, so authentication is deliberately minimal.
+                    Any email works. Use <span className="font-mono">ops@tessera.dev</span> for the
+                    operator role. Authentication is deliberately minimal: this console demonstrates
+                    inventory correctness, not credential handling.
                </p>
 
                <form onSubmit={submit} className="card p-5 space-y-4">

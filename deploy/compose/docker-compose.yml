@@ -118,7 +118,11 @@ services:
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:29092 >/dev/null 2>&1"]
+      # Probe the 0.0.0.0 listener. The internal PLAINTEXT listener binds to the
+      # `kafka` hostname's address rather than loopback, so `localhost:29092`
+      # is refused from inside the container and the broker reports unhealthy
+      # while running perfectly well.
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"]
       interval: 10s
       timeout: 10s
       retries: 30
@@ -186,11 +190,12 @@ services:
   # Observability
   # ───────────────────────────────────────────────────────────────────────────
   prometheus:
-    image: prom/prometheus:v2.54.1
+    image: prom/prometheus:v2.53.0
     container_name: tessera-prometheus
     restart: unless-stopped
     ports:
-      - "9090:9090"
+      # 9091 on the host: 9090 is commonly taken by another Prometheus.
+      - "9091:9090"
     volumes:
       - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -198,15 +203,16 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=7d
       - --web.enable-lifecycle
+    extra_hosts: ["host.docker.internal:host-gateway"]
     networks: [tessera]
     profiles: [obs]
 
   grafana:
-    image: grafana/grafana:11.2.0
+    image: grafana/grafana:11.1.0
     container_name: tessera-grafana
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3002:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
@@ -222,13 +228,12 @@ services:
     profiles: [obs]
 
   jaeger:
-    image: jaegertracing/all-in-one:1.60
+    image: jaegertracing/all-in-one:1.57
     container_name: tessera-jaeger
     restart: unless-stopped
     ports:
-      - "16686:16686"   # UI
-      - "4317:4317"     # OTLP gRPC
-      - "4318:4318"     # OTLP HTTP
+      - "16687:16686"   # UI
+      - "4319:4318"     # OTLP HTTP
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
     networks: [tessera]
@@ -250,6 +255,98 @@ services:
       - "19092:19092"   # proxied kafka
     networks: [tessera]
     profiles: [lab]
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Application tier (profile `app`). One image, eight entry points.
+  #   docker compose --profile core --profile app up -d --build
+  # For day-to-day development, running the services on the host with
+  # `bash scripts/start.sh` is faster; this profile is the containerised path.
+  # ───────────────────────────────────────────────────────────────────────────
+  inventory:
+    build: { context: ../.., args: { SERVICE: inventory-engine } }
+    image: tessera/service:dev
+    environment: &app-env
+      NODE_ENV: production
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-change-me-internal}
+      JWT_SECRET: ${JWT_SECRET:-change-me-jwt}
+      WAITING_ROOM_SECRET: ${WAITING_ROOM_SECRET:-change-me-wr}
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-change-me-webhook}
+      KAFKA_BROKERS: kafka:29092
+      REDIS_URL: redis://redis:6379
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      INVENTORY_DATABASE_URL: postgresql://tessera:tessera@postgres:5432/inventory
+      RESERVATION_DATABASE_URL: postgresql://tessera:tessera@postgres:5432/reservation
+      PAYMENT_DATABASE_URL: postgresql://tessera:tessera@postgres:5432/payment
+      RECONCILIATION_DATABASE_URL: postgresql://tessera:tessera@postgres:5432/reconciliation
+      NOTIFICATION_DATABASE_URL: postgresql://tessera:tessera@postgres:5432/notification
+      DISCOVERY_DATABASE_URL: postgresql://tessera:tessera@postgres:5432/discovery
+      INVENTORY_URL: http://inventory:4001
+      RESERVATION_URL: http://reservation:4002
+      PAYMENT_URL: http://payment:4003
+      RECONCILIATION_URL: http://reconciliation:4004
+      NOTIFICATION_URL: http://notification:4005
+      DISCOVERY_URL: http://discovery:4006
+      PRICING_URL: http://pricing:4007
+    ports: ["4001:4001"]
+    depends_on: { postgres: { condition: service_healthy }, kafka: { condition: service_healthy } }
+    networks: [tessera]
+    profiles: [app]
+  payment:
+    image: tessera/service:dev
+    build: { context: ../.., args: { SERVICE: payment } }
+    environment: *app-env
+    ports: ["4003:4003"]
+    depends_on: { postgres: { condition: service_healthy } }
+    networks: [tessera]
+    profiles: [app]
+  pricing:
+    image: tessera/service:dev
+    build: { context: ../.., args: { SERVICE: pricing } }
+    environment: *app-env
+    ports: ["4007:4007"]
+    depends_on: [inventory]
+    networks: [tessera]
+    profiles: [app]
+  reservation:
+    image: tessera/service:dev
+    build: { context: ../.., args: { SERVICE: reservation } }
+    environment: *app-env
+    ports: ["4002:4002"]
+    depends_on: [inventory, payment, pricing]
+    networks: [tessera]
+    profiles: [app]
+  reconciliation:
+    image: tessera/service:dev
+    build: { context: ../.., args: { SERVICE: reconciliation } }
+    environment: *app-env
+    ports: ["4004:4004"]
+    depends_on: { postgres: { condition: service_healthy } }
+    networks: [tessera]
+    profiles: [app]
+  notification:
+    image: tessera/service:dev
+    build: { context: ../.., args: { SERVICE: notification } }
+    environment: *app-env
+    ports: ["4005:4005"]
+    depends_on: { kafka: { condition: service_healthy } }
+    networks: [tessera]
+    profiles: [app]
+  discovery:
+    image: tessera/service:dev
+    build: { context: ../.., args: { SERVICE: discovery } }
+    environment: *app-env
+    ports: ["4006:4006"]
+    depends_on: [inventory]
+    networks: [tessera]
+    profiles: [app]
+  gateway:
+    image: tessera/service:dev
+    build: { context: ../.., args: { SERVICE: gateway } }
+    environment: *app-env
+    ports: ["4000:4000"]
+    depends_on: [reservation, discovery]
+    networks: [tessera]
+    profiles: [app]
 
 volumes:
   postgres_data:

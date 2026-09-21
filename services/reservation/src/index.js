@@ -18,13 +18,20 @@
  */
 
 require('../../inventory-engine/src/config/env');
+require('@tessera/shared/src/observability/tracing');
 
 const { createPool } = require('@tessera/shared/src/db/pool');
 const { createLogger } = require('@tessera/shared/src/observability/logger');
 const { createApp, asyncHandler, errorMiddleware, listen } = require('@tessera/shared/src/http/server');
 const { withIdempotency } = require('@tessera/shared/src/idempotency');
 const { metrics } = require('@tessera/shared/src/observability/metrics');
-const { BadRequestError, NotFoundError, ConflictError, UnauthorizedError } = require('@tessera/shared/src/errors');
+const {
+     BadRequestError,
+     NotFoundError,
+     ConflictError,
+     UnauthorizedError,
+     ServiceUnavailableError,
+} = require('@tessera/shared/src/errors');
 
 const { SagaOrchestrator } = require('./saga/orchestrator');
 const { HttpInventoryClient, HttpPaymentClient } = require('./clients');
@@ -141,11 +148,19 @@ app.post(
                );
           }
 
+          // Server-side price. Any `priceCents` the client sent is ignored.
+          const quote = await priceItems(eventId, items);
+          const fareFor = (i) =>
+               quote.byKey.get(`${i.resourceId ?? i.resourceCode}:${i.spanFrom ?? 0}:${i.spanTo ?? 1}`);
+
           const result = await withIdempotency(
                pool,
                { scope: 'reservation.create', key, ownerId: req.customerId, request: req.body },
                async (client) => {
-                    const totalCents = items.reduce((sum, i) => sum + (i.priceCents ?? 0), 0);
+                    // Seat fares come from the quote. Pool items (meals) are
+                    // priced by the inventory engine at hold time, so the hold's
+                    // total — not this estimate — is what gets charged.
+                    const totalCents = quote.totalCents;
 
                     const { rows } = await client.query(
                          `INSERT INTO reservations
@@ -174,13 +189,15 @@ app.post(
                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
                               [
                                    reservation.id,
-                                   item.resourceCode ?? null,
+                                   // The quote knows the human-facing seat code
+                                   // even when the client sent only an id.
+                                   item.resourceCode ?? fareFor(item)?.resourceCode ?? null,
                                    item.resourceId ?? null,
                                    item.spanFrom ?? null,
                                    item.spanTo ?? null,
                                    item.poolCode ?? null,
                                    item.quantity ?? 1,
-                                   item.priceCents ?? 0,
+                                   fareFor(item)?.fareCents ?? 0,
                                    item.passengerName ?? null,
                                    item.passengerAge ?? null,
                               ]
@@ -204,6 +221,9 @@ app.post(
                                         resourceCode: i.resourceCode,
                                         spanFrom: i.spanFrom ?? 0,
                                         spanTo: i.spanTo ?? 1,
+                                        // The quoted fare travels with the item
+                                        // and is recorded on the allocation.
+                                        priceCents: fareFor(i)?.fareCents,
                                    })),
                               pools: items
                                    .filter((i) => i.poolCode)
@@ -224,6 +244,15 @@ app.post(
                               // than making it guess a polling interval.
                               pollUrl: `/v1/reservations/${reservation.id}`,
                               pollAfterMs: 500,
+                              quote: {
+                                   quoteId: quote.quoteId,
+                                   totalCents: quote.totalCents,
+                                   items: quote.items.map((q) => ({
+                                        resourceCode: q.resourceCode,
+                                        fareCents: q.fareCents,
+                                        tier: q.tier.label,
+                                   })),
+                              },
                          },
                     };
                }
@@ -234,6 +263,60 @@ app.post(
           res.status(result.replayed ? 200 : 202).json({ data: result.body, replayed: result.replayed });
      })
 );
+
+/**
+ * Price the requested items server-side.
+ *
+ * Called BEFORE the database transaction opens: a network call inside a
+ * transaction holds its connection and row locks for as long as the remote
+ * service takes, which is how a slow dependency becomes pool exhaustion.
+ *
+ * Fails closed. If prices cannot be determined, nothing is sold — selling at an
+ * unknown price is worse than a brief "try again".
+ */
+async function priceItems(eventId, items) {
+     const seatItems = items.filter((i) => i.resourceId || i.resourceCode);
+     if (seatItems.length === 0) return { byKey: new Map(), totalCents: 0, items: [] };
+
+     const controller = new AbortController();
+     const timer = setTimeout(() => controller.abort(), 5000);
+     let res;
+     try {
+          res = await fetch(`${config.PRICING_URL}/v1/quote`, {
+               method: 'POST',
+               signal: controller.signal,
+               headers: { 'content-type': 'application/json' },
+               body: JSON.stringify({
+                    eventId,
+                    items: seatItems.map((i) => ({
+                         resourceId: i.resourceId,
+                         resourceCode: i.resourceCode,
+                         spanFrom: i.spanFrom ?? 0,
+                         spanTo: i.spanTo ?? 1,
+                    })),
+               }),
+          });
+     } catch (err) {
+          throw new ServiceUnavailableError(
+               err.name === 'AbortError' ? 'Pricing did not respond in time' : 'Pricing is unavailable'
+          );
+     } finally {
+          clearTimeout(timer);
+     }
+
+     const json = await res.json().catch(() => null);
+     if (res.status === 404) throw new NotFoundError(json?.error?.message || 'Seat not found');
+     if (res.status === 400) throw new BadRequestError(json?.error?.message || 'Invalid items');
+     if (!res.ok) throw new ServiceUnavailableError('Pricing is unavailable');
+
+     const quote = json.data;
+     const byKey = new Map();
+     for (const q of quote.items) {
+          byKey.set(`${q.resourceId}:${q.spanFrom}:${q.spanTo}`, q);
+          byKey.set(`${q.resourceCode}:${q.spanFrom}:${q.spanTo}`, q);
+     }
+     return { byKey, totalCents: quote.totalCents, items: quote.items, quoteId: quote.quoteId };
+}
 
 /** Progress. The client polls this after creating a reservation. */
 app.get(

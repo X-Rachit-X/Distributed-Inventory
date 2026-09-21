@@ -1,0 +1,24 @@
+# Scale the request-facing services on CPU. The reservation service is
+# stateless, so adding replicas cannot affect correctness; the database
+# constraint is the authority no matter how many callers there are.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: gateway, namespace: tessera }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: gateway }
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: reservation, namespace: tessera }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: reservation }
+  minReplicas: 3
+  maxReplicas: 12
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }

@@ -592,28 +592,27 @@ store rather than sharing PostgreSQL.
 
 ---
 
-## 13. What is not built
+## 13. What is and is not built
 
-State this without being prompted if performance or production-readiness comes up. Volunteering
-your gaps is what makes the rest of your claims credible.
+State this without being prompted. Volunteering your gaps is what makes the rest
+credible.
 
 | Area | Status |
 |---|---|
-| Inventory engine, saga, payments, reconciliation, admission control | **Built and tested** (40 tests) |
-| Contention Lab, invariant verification, benchmark artifacts | **Built, results recorded** |
-| HTTP services, gateway, frontend | **Partially built** — the engines are tested directly |
-| Kafka relay wiring end-to-end | **Built, not yet run under load** |
-| OpenTelemetry tracing, Grafana dashboards | **Designed, not built** |
-| k6 HTTP benchmarks, chaos suite | **Designed, harness exists, not run** |
-| Kubernetes manifests | **Not built** |
-| Schema Registry / Avro | **Researched, deliberately not implemented** — validation happens at producer and consumer instead |
-| Multi-instance scaling measurements | **Not run** |
+| Inventory engine, saga, payments (UNKNOWN), reconciliation, admission control | **Built, 40 integration tests** |
+| Eight HTTP services, gateway with RBAC, React console | **Built, 31 end-to-end checks** |
+| Transactional outbox → Kafka, idempotent consumers, DLQ + replay, versioned events | **Built; survived a real multi-hour broker outage (931 events, none lost)** |
+| Search: Kafka-fed projection, Elasticsearch with PostgreSQL fallback, L1/L2 cache | **Built** |
+| Server-side pricing (distance × demand tier) | **Built** |
+| Prometheus metrics, Grafana dashboard, OpenTelemetry tracing | **Built** (dashboard provisioned; tracing on when Jaeger runs) |
+| Contention Lab (9 strategies), chaos script (Kafka / Redis / payment) | **Built, results recorded** |
+| k6 flash-sale script | **Written, results not yet recorded** |
+| Kubernetes manifests | **Production-shaped, not run on a cluster** |
+| Horizontal scaling | **Correctness verified with two saga workers; no scaling curve** |
+| Schema Registry / Avro | **Deliberately not built** — JSON Schema + upcasters instead |
 
-All measurements come from one Windows laptop with PostgreSQL in Docker. They characterise
-*relative* behaviour between strategies. They are not production capacity figures and I will
-not present them as such.
-
----
+All measurements come from one laptop with PostgreSQL in Docker. They characterise
+*relative* behaviour between strategies, not production capacity.
 
 ## 14. Questions to ask them
 

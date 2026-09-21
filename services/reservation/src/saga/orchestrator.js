@@ -423,10 +423,20 @@ class SagaOrchestrator {
                     [saga.reservation_id]
                );
 
+               const { rows: seatRows } = await client.query(
+                    `SELECT resource_code FROM reservation_items
+                      WHERE reservation_id = $1 AND resource_code IS NOT NULL`,
+                    [saga.reservation_id]
+               );
+
                const seq = await nextSeq(client, saga.reservation_id);
                await enqueue(client, {
                     topic: 'booking.events',
                     type: 'booking.confirmed',
+                    // v2: explicit currency and seat codes. v1 consumers keep
+                    // working because the change is additive; readers that
+                    // declare v2 get older v1 events upcast on the way in.
+                    version: 2,
                     aggregateId: saga.reservation_id,
                     aggregateSeq: seq,
                     correlationId: saga.correlation_id,
@@ -435,6 +445,8 @@ class SagaOrchestrator {
                          customer_id: ctx.customerId,
                          reference,
                          total_cents: ctx.totalCents,
+                         currency: 'INR',
+                         seat_codes: seatRows.map((r) => r.resource_code),
                     },
                });
 

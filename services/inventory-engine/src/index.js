@@ -16,6 +16,7 @@
  */
 
 require('./config/env');
+require('@tessera/shared/src/observability/tracing');
 
 const { createPool } = require('@tessera/shared/src/db/pool');
 const { createLogger } = require('@tessera/shared/src/observability/logger');
@@ -27,7 +28,7 @@ const { BadRequestError, UnauthorizedError, NotFoundError } = require('@tessera/
 const { reserve } = require('./engine/reserve');
 const { confirm, release, cancelBooking } = require('./engine/confirm');
 const { blockResource, unblockResource } = require('./engine/admin');
-const { getAvailability, getResources } = require('./engine/availability');
+const { getAvailability, getResources, getSegmentAvailability, findAdjacent } = require('./engine/availability');
 const { ExpiryWorker } = require('./workers/expiry.worker');
 
 const config = require('./config');
@@ -227,8 +228,8 @@ app.get(
      '/v1/events/:eventId/span-points',
      asyncHandler(async (req, res) => {
           const { rows } = await pool.query(
-               `SELECT position, ref, label, code FROM span_points
-                 WHERE event_id = (SELECT id FROM inventory_events WHERE id = $1 OR external_ref = $1::text)
+               `SELECT position, ref, label, code, metadata FROM span_points
+                 WHERE event_id = (SELECT id FROM inventory_events WHERE id::text = $1 OR external_ref = $1)
                  ORDER BY position`,
                [req.params.eventId]
           );
@@ -258,6 +259,33 @@ app.get(
                spanFrom: req.query.spanFrom != null ? Number(req.query.spanFrom) : undefined,
                spanTo: req.query.spanTo != null ? Number(req.query.spanTo) : undefined,
                class: req.query.class,
+          });
+          res.json({ data, as_of: new Date().toISOString(), authoritative: false });
+     })
+);
+
+app.get(
+     '/v1/events/:eventId/segment-availability',
+     asyncHandler(async (req, res) => {
+          const data = await getSegmentAvailability(pool, req.params.eventId);
+          res.json({ data, as_of: new Date().toISOString(), authoritative: false });
+     })
+);
+
+/**
+ * "N seats together." Returns ranked candidate runs of adjacent free seats.
+ * Candidates only — nothing is reserved here, and a candidate can be taken
+ * before the caller reserves it, in which case the constraint refuses and the
+ * caller tries the next run.
+ */
+app.get(
+     '/v1/events/:eventId/adjacent',
+     asyncHandler(async (req, res) => {
+          const data = await findAdjacent(pool, req.params.eventId, {
+               count: Math.min(6, Math.max(2, Number(req.query.count ?? 2))),
+               spanFrom: Number(req.query.spanFrom ?? 0),
+               spanTo: req.query.spanTo != null ? Number(req.query.spanTo) : null,
+               resourceClass: req.query.class ?? null,
           });
           res.json({ data, as_of: new Date().toISOString(), authoritative: false });
      })

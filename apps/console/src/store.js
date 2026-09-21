@@ -23,15 +23,16 @@ export const useAuth = create((set) => {
           token: saved?.token ?? null,
           customerId: saved?.customerId ?? null,
           email: saved?.email ?? null,
+          role: saved?.role ?? 'CUSTOMER',
 
-          signIn: ({ token, customerId, email }) => {
+          signIn: ({ token, customerId, email, role = 'CUSTOMER' }) => {
                setToken(token);
                try {
-                    localStorage.setItem('tessera.auth', JSON.stringify({ token, customerId, email }));
+                    localStorage.setItem('tessera.auth', JSON.stringify({ token, customerId, email, role }));
                } catch {
                     /* private browsing; the session still works in memory */
                }
-               set({ token, customerId, email });
+               set({ token, customerId, email, role });
           },
 
           signOut: () => {
@@ -41,7 +42,7 @@ export const useAuth = create((set) => {
                } catch {
                     /* nothing to clean up */
                }
-               set({ token: null, customerId: null, email: null });
+               set({ token: null, customerId: null, email: null, role: 'CUSTOMER' });
           },
      };
 });

@@ -1,421 +1,136 @@
-# ScaleRail — REST API Reference
+# API reference
 
-All endpoints are served through the **API Gateway** at `http://localhost:3000`.
+The browser talks only to the **gateway** on `:4000`, under `/api`. Everything
+else is internal and requires the `x-internal-token` header.
 
-## Authentication
+Conventions:
 
-Most endpoints require a valid JWT access token:
-```
-Authorization: Bearer <accessToken>
-```
+- Errors: `{ "error": { "code": "…", "message": "…" } }`.
+- **409 is expected under contention** ("someone else took that seat"). It is not a
+  server fault. 429 = rate limited (honour `Retry-After`). 503 = shed or dependency
+  down (retry shortly).
+- Mutations take an `Idempotency-Key` header. Same key + same body → the original
+  response replayed (`"replayed": true`). Same key + different body → 422.
+- Read endpoints that return availability carry `as_of` and `authoritative: false`.
+- Every response has `x-request-id`; pass `x-correlation-id` to thread a flow.
 
-Tokens are obtained via the login endpoint. On expiry (15 min), the Axios client automatically calls `/api/users/auth/refresh` using the HTTP-only refresh cookie.
-
----
-
-## User Service  `/api/users`
+## Public API (gateway :4000)
 
 ### Auth
 
-#### `POST /api/users/auth/register/send-otp`
-Start email registration. Sends a 6-digit OTP to the provided email.
-
-**Body**:
-```json
-{
-  "firstName": "string",
-  "lastName": "string",
-  "email": "string",
-  "password": "string"
-}
-```
-
-**Response** `200`:
-```json
-{ "message": "OTP sent to email" }
-```
-
----
-
-#### `POST /api/users/auth/register/verify-otp`
-Verify OTP and create account.
-
-**Body**:
-```json
-{ "otp": "123456" }
-```
-> OTP is stored in session/Redis from the send-otp call.
-
-**Response** `201`:
-```json
-{ "message": "Account created. Please log in." }
-```
-
----
-
-#### `POST /api/users/auth/login`
-Authenticate user. Returns access token in body, refresh token as HTTP-only cookie.
-
-**Body**:
-```json
-{
-  "email": "user@example.com",
-  "password": "yourpassword"
-}
-```
-
-**Response** `200`:
-```json
-{
-  "accessToken": "eyJhbGci...",
-  "loggedInUser": {
-    "id": "uuid",
-    "firstName": "John",
-    "lastName": "Doe",
-    "email": "user@example.com"
-  }
-}
-```
-
----
-
-#### `POST /api/users/auth/refresh`
-Rotate refresh token and issue new access token.
-
-> Requires `refreshToken` cookie (set automatically by login).
-
-**Response** `200`:
-```json
-{ "accessToken": "eyJhbGci..." }
-```
-
----
-
-#### `POST /api/users/auth/logout`
-Revoke refresh token and clear cookie.
-
-**Response** `200`:
-```json
-{ "message": "Logged out" }
-```
-
----
-
-#### `GET /api/users/auth/me`
-Get the currently authenticated user's profile.
-
-🔐 **Auth required**
-
-**Response** `200`:
-```json
-{
-  "id": "uuid",
-  "firstName": "John",
-  "lastName": "Doe",
-  "email": "user@example.com",
-  "isVerified": true
-}
-```
-
----
-
-## Search Service  `/api/search`
-
-#### `GET /api/search/trains`
-Search trains using fuzzy Elasticsearch matching.
-
-**Query params**:
-
-| Param | Type | Required | Description |
+| Method | Path | Body | Notes |
 |---|---|---|---|
-| `from` | string | ✅ | Origin station name or code |
-| `to` | string | ✅ | Destination station name or code |
-| `date` | string (YYYY-MM-DD) | ❌ | Travel date; omit for any date |
+| POST | `/api/auth/login` | `{ email }` | Demo sign-in. Returns `{ token, customerId, role }`. `ops@tessera.dev` gets `OPERATOR`. |
 
-**Response** `200`:
-```json
-{
-  "count": 3,
-  "from": { "query": "DEL", "resolved": "New Delhi" },
-  "to":   { "query": "MUM", "resolved": "Mumbai Central" },
-  "date": "2025-01-15",
-  "trains": [
-    {
-      "trainId": "uuid",
-      "trainName": "Rajdhani Express",
-      "trainNumber": "12301",
-      "from": {
-        "name": "New Delhi",
-        "code": "NDLS",
-        "departure": "16:00",
-        "sequenceNumber": 1,
-        "stationId": "uuid"
-      },
-      "to": {
-        "name": "Mumbai Central",
-        "code": "MMCT",
-        "arrival": "08:00",
-        "sequenceNumber": 5,
-        "stationId": "uuid"
-      },
-      "schedule": {
-        "scheduleId": "uuid",
-        "departureDate": "2025-01-15",
-        "status": "SCHEDULED"
-      },
-      "seatSummary": {
-        "SLEEPER": 120,
-        "AC_3_TIER": 60,
-        "AC_2_TIER": 30,
-        "AC_FIRST": 10,
-        "total": 220
-      }
-    }
-  ]
-}
-```
+Send `Authorization: Bearer <token>` on authenticated routes.
 
----
+### Discovery (no auth)
 
-## Inventory Service  `/api/inventory`
-
-#### `GET /api/inventory/:scheduleId/availability`
-Get seat availability counts for a schedule.
-
-🔐 **Auth required**
-
-**Response** `200`:
-```json
-{
-  "trainId": "uuid",
-  "trainName": "Rajdhani Express",
-  "trainNumber": "12301",
-  "scheduleId": "uuid",
-  "departureDate": "2025-01-15",
-  "totalSeats": 220,
-  "available": 185,
-  "locked": 5,
-  "booked": 30
-}
-```
-
----
-
-#### `GET /api/inventory/:scheduleId/seats`
-Get detailed seat list for a schedule. Supports segment filtering.
-
-🔐 **Auth required**
-
-**Query params**:
-
-| Param | Type | Description |
+| Method | Path | Notes |
 |---|---|---|
-| `fromSeq` | integer | Origin sequence number (segment booking) |
-| `toSeq` | integer | Destination sequence number (segment booking) |
+| GET | `/api/search?from&to&date&class&train&departAfter&departBefore&arriveAfter&arriveBefore&minFare&maxFare&onlyAvailable` | Typo-tolerant. Returns trips with per-class availability and fares. Response also has `backend` (`elasticsearch`/`postgres`), `cache` (`L1`/`L2`/`MISS`/`COALESCED`), `ageSeconds`. |
+| GET | `/api/stations?q=` | Station autocomplete. |
+| GET | `/api/events` | Departures with live available counts. |
+| GET | `/api/events/:eventId/span-points` | The stops of a journey, in order, with times. |
+| GET | `/api/events/:eventId/availability?spanFrom&spanTo` | Per-class counts for a journey. |
+| GET | `/api/events/:eventId/resources?spanFrom&spanTo` | Every seat with status `AVAILABLE/HELD/SOLD/BLOCKED` **for that span**. |
+| GET | `/api/events/:eventId/adjacent?count&spanFrom&spanTo&class` | Candidate runs of N adjacent free seats. |
 
-**Response** `200`:
-```json
-{
-  "seats": [
-    {
-      "seatId": "uuid",
-      "seatNumber": 1,
-      "seatType": "SLEEPER",
-      "price": 45000,
-      "status": "AVAILABLE",
-      "segmentStatus": "AVAILABLE"
-    }
-  ]
-}
-```
+### Pricing (no auth)
 
-> Prices are in **paise** (₹1 = 100 paise).
-
----
-
-## Booking Service  `/api/bookings`
-
-#### `POST /api/bookings`
-Create a new booking. Locks seats and creates a Razorpay payment order.
-
-🔐 **Auth required**
-
-**Body**:
-```json
-{
-  "scheduleId": "uuid",
-  "seatIds": ["uuid1", "uuid2"],
-  "passengers": [
-    { "name": "John Doe", "age": 30, "gender": "MALE" },
-    { "name": "Jane Doe", "age": 28, "gender": "FEMALE" }
-  ],
-  "idempotencyKey": "client-generated-uuid",
-  "fromStationId": "uuid",
-  "toStationId": "uuid",
-  "fromSeq": 1,
-  "toSeq": 5
-}
-```
-
-**Response** `201`:
-```json
-{
-  "bookingId": "uuid",
-  "status": "PAYMENT_PENDING",
-  "paymentOrder": {
-    "gatewayOrderId": "order_xxx",
-    "keyId": "rzp_test_xxx",
-    "amount": 90000,
-    "currency": "INR"
-  }
-}
-```
-
----
-
-#### `POST /api/bookings/:bookingId/payment/verify`
-Verify Razorpay payment after user completes checkout.
-
-🔐 **Auth required**
-
-**Body**:
-```json
-{
-  "razorpayPaymentId": "pay_xxx",
-  "razorpaySignature": "hmac_signature"
-}
-```
-
-**Response** `200`:
-```json
-{ "message": "Payment verified. Booking confirmation in progress." }
-```
-
----
-
-#### `GET /api/bookings`
-List the authenticated user's bookings.
-
-🔐 **Auth required**
-
-**Query params**:
-
-| Param | Type | Description |
+| Method | Path | Notes |
 |---|---|---|
-| `status` | string | Filter by status (CONFIRMED, CANCELLED, etc.) |
-| `page` | integer | Page number (default: 1) |
-| `limit` | integer | Results per page (default: 10) |
+| POST | `/api/pricing/quote` | `{ eventId, items:[{resourceId, spanFrom, spanTo}] }` → fare per item with distance share and demand tier. Informational — the binding price is set server-side at reservation time. |
+| GET | `/api/pricing/rules` | The tiers, for explaining a price. |
 
-**Response** `200`:
-```json
-{
-  "bookings": [
-    {
-      "id": "uuid",
-      "trainName": "Rajdhani Express",
-      "trainNumber": "12301",
-      "status": "CONFIRMED",
-      "departureDate": "2025-01-15",
-      "totalAmount": 90000,
-      "seatCount": 2,
-      "createdAt": "2025-01-10T12:00:00Z"
-    }
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 10,
-    "totalPages": 3,
-    "total": 25
-  }
-}
-```
+### Reservations (auth)
 
----
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/reservations` | **Idempotency-Key required.** Body `{ eventId, items:[{resourceId, spanFrom, spanTo, passengerName?}], ttlSeconds? }`. Any `priceCents` sent is ignored. Returns **202** `{ reservationId, state:"PENDING", pollUrl, quote }`. The saga continues in the background. |
+| GET | `/api/reservations/:id` | `{ state, progress, bookingReference, holdExpiresAt, items, settled }`. Poll until `settled`. Another customer's id → 404. |
+| GET | `/api/reservations` | Your last 50. |
+| POST | `/api/reservations/:id/cancel` | Idempotent. Confirmed → release inventory + refund. In flight → saga compensates. |
+| GET | `/api/notifications` | Your notifications. |
 
-#### `GET /api/bookings/:bookingId`
-Get full details of a single booking.
+Reservation `state`: `PENDING → HELD → AWAITING_PAYMENT → CONFIRMED`, or `FAILED` /
+`CANCELLED` / `EXPIRED`. `progress` is a human sentence derived from the saga state.
 
-🔐 **Auth required**
+### Waiting room (auth; enforced on reserve when `WAITING_ROOM_ENABLED=true`)
 
-**Response** `200`:
-```json
-{
-  "id": "uuid",
-  "trainName": "Rajdhani Express",
-  "trainNumber": "12301",
-  "status": "CONFIRMED",
-  "departureDate": "2025-01-15",
-  "totalAmount": 90000,
-  "seatCount": 2,
-  "createdAt": "2025-01-10T12:00:00Z",
-  "seats": [
-    { "seatId": "uuid", "seatNumber": 15, "seatType": "SLEEPER", "price": 45000 }
-  ],
-  "passengers": [
-    { "id": "uuid", "name": "John Doe", "age": 30, "gender": "MALE" }
-  ]
-}
-```
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/waiting-room/:eventId/join` | `{ sessionId, ticket, position, aheadOfYou, rejoined }`. Rejoining keeps your place. |
+| GET | `/api/waiting-room/:eventId/status` | `QUEUED` with position and estimated wait, or `ADMITTED` with a signed token. Send it as `x-waiting-room-token` on reserve. |
+| POST | `/api/waiting-room/:eventId/leave` | Frees your slot. |
 
----
+### Operations
 
-#### `DELETE /api/bookings/:bookingId`
-Cancel a booking. Initiates refund if payment was captured.
+| Method | Path | Role | Notes |
+|---|---|---|---|
+| GET | `/api/ops/invariants` | public | Correctness invariants from the inventory DB. 500 only for CRITICAL/HIGH violations. |
+| GET | `/api/ops/scoreboard` | public | Correctness counters from reconciliation. |
+| GET | `/api/ops/discovery`, `/api/ops/notifications` | public | Consumer status: events processed, lag, staleness. |
+| GET | `/api/ops/issues?status=open\|all` | OPERATOR | Reconciliation issues. |
+| POST | `/api/ops/reconcile` | OPERATOR | Run a reconciliation pass now. |
+| POST | `/api/ops/issues/:id/{resolve\|ignore\|retry}` | OPERATOR | `{ reason }` required; logged. |
+| POST | `/api/ops/resources/:resourceId/block` | OPERATOR | `{ reason, spanFrom?, spanTo? }`. **409 if held or sold** — a customer's claim wins. |
+| POST | `/api/ops/resources/:resourceId/unblock` | OPERATOR | `{ reason }`. |
+| GET | `/api/ops/unresolved-payments` | OPERATOR | Payments in UNKNOWN. |
+| POST | `/api/ops/provider-mode` | OPERATOR | `{ mode }` for the fake provider: `ok, decline, timeout_after_success, timeout_before_success, slow, error_after_success, duplicate_webhook, out_of_order_webhook`. |
+| GET | `/api/ops/dead-letters` | OPERATOR | Notification DLQ. |
+| POST | `/api/ops/dead-letters/replay` | OPERATOR | `{ ids? }` replays after a fix; dedupe makes it safe. |
 
-🔐 **Auth required**
+## Internal APIs (service-to-service)
 
-**Response** `200`:
-```json
-{ "message": "Booking cancelled. Refund will be processed within 5-7 business days." }
-```
+| Service | Method | Path | Called by |
+|---|---|---|---|
+| inventory | POST | `/internal/reserve` (Idempotency-Key) | reservation saga |
+| inventory | POST | `/internal/confirm` | saga |
+| inventory | POST | `/internal/release` | saga compensation |
+| inventory | POST | `/internal/cancel-booking` | reservation cancel |
+| inventory | GET | `/v1/events/:id/segment-availability` | discovery |
+| inventory | POST | `/admin/resources/:id/{block,unblock}` | gateway (operator) |
+| payment | POST | `/internal/charge` | saga |
+| payment | POST | `/internal/payments/:id/resolve` | saga (UNKNOWN) |
+| payment | POST | `/internal/payments/:id/refund` | saga / cancel |
+| payment | POST | `/webhooks/provider` | the payment provider (HMAC-signed, raw body) |
+| pricing | POST | `/v1/quote` | reservation |
+| reconciliation | GET | `/v1/scoreboard`, `/v1/issues`, `/v1/runs` | gateway |
+| notification | GET | `/v1/notifications`, `/v1/status`, `/admin/dead-letters` | gateway |
+| discovery | GET | `/v1/search`, `/v1/stations`, `/v1/status`; POST `/admin/rebuild` | gateway |
 
-**Error** `400`:
-```json
-{ "message": "Booking cannot be cancelled in FAILED state" }
-```
+Every service also serves `GET /health` (liveness: process only), `GET /ready`
+(readiness: dependencies, draining), `GET /metrics` (Prometheus).
 
----
+## Events (Kafka)
 
-## Admin Service  `/api/admin`
+| Topic | Key | Types | Producer → consumers |
+|---|---|---|---|
+| `inventory.events` (6p) | event id | `inventory.held/confirmed/released/cancelled/expired/blocked/unblocked` v1 | inventory → discovery |
+| `payment.events` (6p) | reservation id | `payment.captured/failed` v1 | payment → (analytics) |
+| `booking.events` (6p) | reservation id | `booking.confirmed` **v2** (v1 upcast), `booking.cancelled` v1 | reservation → notification |
+| `*.dlq` | original key | dead letters | consumers |
 
-> All admin endpoints require authentication. Role-based access control can be added as a future enhancement.
+Envelope: `{ event_id, event_type, event_version, aggregate_id, aggregate_seq,
+occurred_at, correlation_id, causation_id, trace_id, payload }`. Schemas in
+`packages/shared/src/events/schemas.js`.
 
-#### `POST /api/admin/stations` — Create station
-#### `GET /api/admin/stations` — List stations
-#### `PUT /api/admin/stations/:id` — Update station
+## How to explain the API in an interview
 
-#### `POST /api/admin/trains` — Create train
-#### `GET /api/admin/trains` — List trains
-#### `PUT /api/admin/trains/:id` — Update train
-
-#### `POST /api/admin/routes` — Create route with stations
-#### `GET /api/admin/routes` — List routes
-#### `POST /api/admin/routes/:id/stations` — Add station to route
-
-#### `POST /api/admin/schedules` — Create schedule
-#### `GET /api/admin/schedules` — List schedules
-#### `PUT /api/admin/schedules/:id` — Update schedule status
-
----
-
-## Error Format
-
-All error responses follow:
-```json
-{
-  "message": "Human-readable error description",
-  "code": "MACHINE_READABLE_CODE",
-  "status": 400
-}
-```
-
-Common status codes:
-| Code | Meaning |
-|---|---|
-| 400 | Bad request / validation error |
-| 401 | Unauthenticated (no/invalid token) |
-| 403 | Forbidden |
-| 404 | Resource not found |
-| 409 | Conflict (idempotency key reuse, seat already booked) |
-| 422 | Unprocessable entity |
-| 500 | Internal server error |
+1. **"POST /reservations returns 202, not 201."** The reservation becomes durable in
+   one fast transaction and a saga worker drives payment and confirmation. Holding a
+   request open across a payment ties a connection and the user's patience to the
+   slowest external system; a client that disconnects, a pod that restarts and a
+   40-second provider all converge to the same place.
+2. **"Idempotency-Key is mandatory on reserve."** The key is claimed atomically
+   before any work, and the original response is stored and replayed — so a retry
+   after a lost response returns the same reservation instead of taking a second
+   seat. Keys are scoped to the caller.
+3. **"409 is a success condition."** Under contention most reserve attempts should
+   get 409. Clients must not blindly retry a 409; they should offer another seat.
+4. **"Reads are labelled non-authoritative."** Availability and search carry
+   `as_of`. The UI says the data may be stale. Only the reserve step decides.
+5. **"The price in the request is ignored."** Server-side pricing is locked into the
+   hold.
+6. **"The public API has no internal ids of other customers."** Wrong owner → 404.
