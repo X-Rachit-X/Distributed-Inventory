@@ -26,6 +26,8 @@ Line by line: [04a-shared-package.md](04a-shared-package.md)
 |---|---|
 | `sql/000_correctness_primitives.sql` | Outbox, idempotency keys, processed events, projection offsets, consumer attempts, dead letters, audit log — applied to every service database |
 | `sql/001_append_only.sql` | Trigger function that blocks UPDATE/DELETE on history tables |
+| `src/config/env.js` | `.env` loader required first by every service, the seed and the e2e runner (real environment variables win) |
+| `src/config/index.js` | `str`, `num` (validated), `flag`, `secret` (refuses dev secrets in production): the one config helper every service uses |
 | `src/db/pool.js` | PostgreSQL pool with statement/lock/idle-in-transaction timeouts as startup options; `withTransaction()` |
 | `src/db/migrate.js` | Checksummed, advisory-locked plain-SQL migration runner |
 | `src/db/migrate-cli.js` | `npm run migrate`: applies shared + per-service migrations to each database |
@@ -39,6 +41,7 @@ Line by line: [04a-shared-package.md](04a-shared-package.md)
 | `src/events/registry.js` | JSON-Schema validation (Ajv) and version upcasting |
 | `src/events/schemas.js` | Every event contract, including `booking.confirmed` v1→v2 |
 | `src/failpoints/index.js` | Named, deterministic crash/throw/delay injection for chaos tests |
+| `src/http/client.js` | `httpRequest()` with a deadline covering the whole exchange and a distinct `UPSTREAM_TIMEOUT` error; `isHealthy()` for readiness probes |
 | `src/http/server.js` | Service shell: correlation ids, liveness vs readiness, metrics, error mapping, graceful shutdown |
 | `src/admission/token-bucket.js` | Atomic token-bucket rate limiter in one Lua script, local fallback when Redis is down |
 | `src/admission/waiting-room.js` | Virtual waiting room: FIFO tickets, atomic admission, signed admission tokens |
@@ -47,7 +50,7 @@ Line by line: [04a-shared-package.md](04a-shared-package.md)
 | `src/observability/logger.js` | Structured JSON logs with request/correlation/trace ids via AsyncLocalStorage |
 | `src/observability/tracing.js` | OpenTelemetry auto-instrumentation, exported to Jaeger when configured |
 | `src/util/backoff.js` | Full-jitter exponential backoff and a retry helper |
-| `test/admission.test.js` | Token bucket and waiting room tests, including five instances admitting concurrently |
+| `test/admission.test.js` | Token bucket and waiting room tests, including five instances admitting concurrently and the wait estimate |
 
 ## `services/inventory-engine` — the authority
 
@@ -56,12 +59,13 @@ Line by line: [04b-inventory-engine.md](04b-inventory-engine.md)
 | File | What it does |
 |---|---|
 | `sql/migrations/010_inventory_core.sql` | Events, stops, coaches, seats, holds, **allocations with the exclusion constraint**, pools |
+| `sql/migrations/010a_fresh_install_trigger_order.sql` | Fix: lets a fresh database migrate (011 and the shared 001 both created the audit trigger) |
 | `sql/migrations/011_ledger_and_guards.sql` | Append-only ledger, state-machine triggers, invariant views |
 | `sql/migrations/012_tighten_insert_guard.sql` | Fix: allocations can no longer be created directly as CONFIRMED |
 | `sql/migrations/013_lab_schema.sql` | Isolated Contention Lab tables, including the unguarded control group |
 | `sql/migrations/014_ledger_baseline.sql` | Fix: opening balance for the ledger; drift view driven from resources |
 | `src/index.js` | HTTP service: internal reserve/confirm/release/cancel, public availability reads, admin block/unblock, invariants endpoint, workers |
-| `src/config/index.js`, `src/config/env.js` | Validated configuration; `.env` loader used by every service |
+| `src/config/index.js` | Validated configuration (via the shared helper) |
 | `src/engine/reserve.js` | **The hot path**: sorted row locks, lazy expiry, hold + allocations, pools, ledger, outbox in one transaction |
 | `src/engine/confirm.js` | Confirm (expiry checked in the same UPDATE), release, cancel booking |
 | `src/engine/availability.js` | Availability per class, per seat, per stop pair; adjacent-seat search |
@@ -78,12 +82,13 @@ Line by line: [04c-reservation-saga.md](04c-reservation-saga.md)
 | File | What it does |
 |---|---|
 | `sql/migrations/010_reservation_core.sql` | Reservations, items, bookings, sagas (trigger-enforced state machine), saga steps |
+| `sql/migrations/011_remove_timed_out.sql` | Removes the unreachable TIMED_OUT saga state from the CHECK and the trigger |
 | `src/index.js` | `POST /v1/reservations` (server-side pricing, idempotent, returns 202), status, list, cancel |
 | `src/saga/orchestrator.js` | Durable saga: one step per claim, CAS transitions, leases, timeouts, compensation, UNKNOWN handling |
-| `src/clients/index.js` | HTTP clients for inventory and payment (payment timeouts flagged indeterminate); in-process clients for tests |
+| `src/clients/index.js` | HTTP clients for inventory, payment (timeouts flagged indeterminate; lookup by idempotency key) and pricing; in-process clients for tests |
 | `src/workers/saga.worker.js` | Polling loop that drives the orchestrator; releases leases on shutdown |
 | `src/config/index.js` | Timeouts, fairness limits, service URLs |
-| `test/integration/saga.test.js` | 12 tests: happy path, decline, UNKNOWN resolution, crash recovery, concurrent workers, refund, webhooks |
+| `test/integration/saga.test.js` | 18 tests: happy path, decline, UNKNOWN resolution, crash recovery, concurrent workers, refund, webhooks, plus the review fixes (CREATED replay, lost response, already-settled payment, abandoned charges, re-run on deadline) |
 
 ## `services/payment`
 
@@ -93,7 +98,7 @@ Line by line: [04d-payment.md](04d-payment.md)
 |---|---|
 | `sql/migrations/010_payment_core.sql` | Payments with UNKNOWN state, refunds (≤ captured), provider events (replay protection), signature failures |
 | `src/index.js` | Raw-body webhook route, internal charge/resolve/refund, operator endpoints |
-| `src/service/payment.service.js` | Charge (row committed before the provider call), resolve UNKNOWN, webhooks, refunds, guarded transitions |
+| `src/service/payment.service.js` | Charge (row committed before the provider call), idempotent resolution (also for abandoned CREATED rows), webhooks, refunds, guarded transitions that write their event in the same transaction |
 | `src/providers/fake.provider.js` | Fault-injecting provider: decline, charge-then-timeout, 500-after-capture, duplicate and out-of-order webhooks |
 | `src/workers/resolver.worker.js` | Resolves UNKNOWN payments by asking the provider |
 | `src/config/index.js` | Configuration; refuses dev secrets in production |
@@ -124,6 +129,7 @@ Line by line: [04f-discovery-notification-reconciliation.md](04f-discovery-notif
 |---|---|
 | `sql/migrations/010_projection.sql` | Trips, stops (trigram index), per-segment availability and fare, dirty queue |
 | `sql/migrations/011_dirty_attempts.sql` | Fix: poison handling for the refresh queue |
+| `sql/migrations/012_dirty_lease.sql` | Lease column, so no transaction is held open across a refresh's HTTP calls |
 | `src/index.js` | Search API with L1/L2 cache and single-flight; Kafka consumer marking trains dirty |
 | `src/projection.js` | Refresher: re-reads inventory, rewrites the projection and ES index; coalesced; resync |
 | `src/search-index.js` | Elasticsearch index and query with circuit breaker; PostgreSQL fallback search |
@@ -144,10 +150,11 @@ Line by line: [04f-discovery-notification-reconciliation.md](04f-discovery-notif
 | File | What it does |
 |---|---|
 | `sql/migrations/010_reconciliation.sql` | Runs, issues, append-only repair log, scoreboard |
-| `src/checks/index.js` | The eight cross-service checks, each with a grace window and a money flag |
+| `sql/migrations/011_allocation_without_booking.sql` | Adds the ALLOCATION_WITHOUT_BOOKING issue kind |
+| `src/checks/index.js` | The eleven cross-service checks, each with a grace window and a money flag |
 | `src/worker.js` | Runs checks, confirms across passes, repairs only safe inventory issues, records everything |
 | `src/index.js` | Scoreboard, issues, manual resolve/ignore/retry with reasons |
-| `test/reconciliation.test.js` | 8 tests: each detector fires on injected corruption; money is never auto-repaired |
+| `test/reconciliation.test.js` | 11 tests: each detector fires on injected corruption; money is never auto-repaired |
 
 ## `lab` — Contention Lab
 
@@ -167,7 +174,7 @@ Line by line: [04g-lab-bench-tests-console-deploy.md](04g-lab-bench-tests-consol
 | File | What it does |
 |---|---|
 | `src/seed.js` | Deterministic railway inventory (trains, stops with times, coaches, seats, meal pool, opening ledger balance) |
-| `src/e2e.js` | 31 end-to-end checks against the live stack |
+| `src/e2e.js` | 39 end-to-end checks against the live stack, including cancellation and search |
 | `k6/flash-sale.js` | k6 flash-sale load test through the gateway; passes only if invariants hold |
 | `results/lab/*.json` | Raw Contention Lab artifacts with seed, commit, environment |
 

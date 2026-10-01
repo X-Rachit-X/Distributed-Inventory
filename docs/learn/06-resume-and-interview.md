@@ -52,7 +52,7 @@ horizontal scaling curve. All numbers come from one laptop.
   shedding. Added a **reconciliation service** with grace windows and a strict
   "never auto-repair money" policy, plus an append-only inventory ledger checked by
   invariant views.
-- 40 integration tests + 31 live end-to-end checks; Prometheus/Grafana,
+- 50 integration tests + 39 live end-to-end checks; Prometheus/Grafana,
   OpenTelemetry/Jaeger, deterministic failpoints for crash testing.
 
 **One-liner for the top of a resume:**
@@ -93,7 +93,7 @@ Browser → Gateway (rate limit, JWT, waiting room) → Reservation (202 + saga 
 | Exactly-once with Kafka? | Kafka gives at-least-once to an external DB. I get *effectively-once effects* by inserting `(consumer, event_id)` in the same transaction as the effect |
 | How do you keep event order? | Partition key = aggregate id. The relay only publishes the oldest pending event per aggregate. Consumers drop events with an older `aggregate_seq` |
 | Why a saga and not 2PC? | 2PC would hold locks across services while a human types card details, and every participant would have to be up. A saga commits locally per step and compensates on failure |
-| What if the worker dies mid-saga? | The saga is a row with a lease. On a graceful stop the lease is released and the step re-runs safely (deterministic idempotency keys). On a hard crash the lease outlives the step deadline, so the step takes its *timeout path* (hold → failed, payment → UNKNOWN, confirm → refund). That is a conservative outcome, never a double effect |
+| What if the worker dies mid-saga? | The saga is a row with a lease. Another worker resumes from the last committed state. Hold and confirm are idempotent, so if the dead worker's step deadline has passed, the step is simply re-run (up to its attempt limit) rather than timed out. Payment never re-charges: a lost charge response is recovered by looking the payment up by its idempotency key and asking the provider |
 | Payment timeout? | It's UNKNOWN, never FAILED. We never retry the charge; we ask the provider by our idempotency key. If it can't be resolved → MANUAL_REVIEW |
 | Paid but the hold expired? | Confirm is one guarded UPDATE `… AND expires_at > now()`. Zero rows → refund path. Never a silent loss |
 | How do you know it's correct? | Invariant views that return 0 rows when healthy, used by tests, the lab, reconciliation and the dashboard; plus an append-only ledger whose fold must equal state |
@@ -109,30 +109,60 @@ Browser → Gateway (rate limit, JWT, waiting room) → Reservation (202 + saga 
 4. *The ledger flagged correct data*: no opening balance → `CAPACITY_ADDED` and a better view.
 5. *A real Kafka outage*: 931 events waited in the outbox, all delivered.
 
-## 4. Honest notes from reading the code
+## 4. Code-review findings and what was done about them
 
-I read every file while writing these docs. These are places where the code and its
-comments disagree, or where an edge case isn't fully closed. None of them can cause
-an **oversell**: the constraint holds regardless. Knowing them makes you *more*
-credible in an interview ("here's what I'd harden next"). Treat them as a
-reviewer's reading of the code, not as tested bugs.
+Reading every file for these docs turned up places where the code and its comments
+disagreed, or where an edge case wasn't closed. Fixing them turned up a few more.
+**None could cause an oversell**: the constraint holds regardless. Every fix has a
+test that fails on the old code and passes on the new.
 
-| # | Where | Observation | Impact | Possible fix |
+This is a good interview story in its own right: *review → reproduce with a failing
+test → fix → prove.*
+
+### Found by reading the code
+
+| # | Finding | Impact before | Fix | Proof |
 |---|---|---|---|---|
-| 1 | `orchestrator.js` `#beginPayment` + `payment.service.js` `charge()` | a duplicate charge request returns the existing row's state. If that row is stuck in **`CREATED`** (payment process crashed after insert, before calling the provider), the saga's `else` branch treats `CREATED` as success → PAYMENT_AUTHORIZED → booking confirmed without a capture | seat issued unpaid; reconciliation flags `CONFIRMED_WITHOUT_PAYMENT` (👤) | treat any state other than CAPTURED/AUTHORIZED as UNKNOWN in the saga; let the resolver also pick up stale `CREATED` rows |
-| 2 | `payment.service.js` header comment at `after_insert_before_charge` | says "the resolver will pick it up", but `resolver.worker.js` only scans `state = 'UNKNOWN'` | a `CREATED` row can sit forever | include `CREATED` older than N seconds in the resolver query |
-| 3 | `payment.service.js` `charge()` / `resolveUnknown()` | the state transition and `#publish` (outbox) are **separate transactions**. The webhook path does both in one | a crash in between drops a `payment.*` event. Nothing consumes `payment.events` yet, so the impact is low today | do the transition and enqueue in one `withTransaction` |
-| 4 | saga step deadlines vs lease | `HOLD_PENDING` 10 s, `CONFIRM_PENDING` 15 s, `PAYMENT_PENDING` 45 s are shorter than the 60 s lease. After a hard crash mid-step, the next worker sees the deadline passed and takes the timeout path instead of re-running the idempotent step | a crash inside confirm → refund while the allocation stays CONFIRMED (a seat is lost for resale); a crash inside payment → paymentId unknown → released while money may be captured (👤) | re-run idempotent steps before timing out, or record `paymentId` before calling, or add a "confirmed allocation without booking" reconciliation check |
-| 5 | `reservation/src/index.js` cancel endpoint | moves in-flight sagas to `RELEASE_PENDING` from `CREATED / HOLD_PENDING / PAYMENT_PENDING`, but the trigger only allows `HOLD_CREATED → RELEASE_PENDING` | the trigger correctly refuses, and the API returns 500 instead of a friendly 409 | only allow cancel from HOLD_CREATED, or set a "cancel requested" flag the saga honours at the next safe point |
-| 6 | `discovery/src/projection.js` `tick()` | HTTP calls to inventory and ES happen while the `dirty_events` transaction is open | bends Rule 2 (read-model DB, small batches, timeouts) | claim with a lease, commit, refresh, then delete |
-| 7 | `notification/src/index.js` | the header says it consumes `payment.events`; the code subscribes only to `booking.events`. `booking.cancelled` is rendered but never produced | comment drift | update the comment, or emit `booking.cancelled` from the cancel path |
-| 8 | `waiting-room.js` `status()` | `this.opts.admitIntervalMs ?? 1000 / 1000` parses as `admitIntervalMs ?? 1` (operator precedence) | only the ETA estimate is affected | `(this.opts.admitIntervalMs ?? 1000) / 1000` |
-| 9 | reconciliation | `BOOKING_WITHOUT_ALLOCATION` and `ORPHAN_PAYMENT` are allowed `kind`s in the schema, but no check implements them | coverage gap | add the two checks (they would also catch #4) |
-| 10 | gateway header comment | lists the order "rate limit → waiting room → auth", but the code runs load-shed → rate limit → **auth → waiting room** | comment drift only | fix the comment |
+| 1 | A replayed charge stuck in **`CREATED`** (payment process died before calling the provider) was treated by the saga as paid | seat issued with no payment | saga treats only CAPTURED/AUTHORIZED as paid; anything else goes to PAYMENT_UNKNOWN and is resolved by asking | test *a charge left in CREATED is never treated as paid* |
+| 2 | The resolver only scanned `UNKNOWN`, although a comment said abandoned `CREATED` rows would be picked up | an abandoned charge sat forever | resolver also claims `CREATED` rows older than 120 s, moves them to UNKNOWN, asks the provider | test *the payment resolver settles charges abandoned in CREATED* |
+| 3 | `charge()` / `resolveUnknown()` changed state and wrote the outbox event in **two** transactions | a crash between them dropped the event | `#transition` writes the state change and its event in one transaction | same test asserts exactly one event per change |
+| 4 | Step deadlines (10–45 s) are shorter than the 60 s lease, so after a hard crash mid-step the next worker took the **timeout path** | crash in confirm → customer refunded while the seat stayed sold; crash in payment → paid customer released | hold and confirm re-run on deadline (they are idempotent) until their attempt limit; payment recovers a lost response by idempotency key | tests *re-runs the hold step…*, *re-runs the confirm step…*, *a charge whose response was lost…* |
+| 5 | Cancelling an in-flight booking tried transitions the trigger forbids | HTTP 500 | cancel is a compare-and-swap from HOLD_CREATED only; otherwise a retryable **409 `BOOKING_IN_PROGRESS`** | e2e *cancelling mid-payment is refused with a retryable 409* |
+| 6 | Discovery held a DB transaction open across HTTP calls | broke Rule 2 | refresh queue uses a lease (migration 012); no transaction spans the network | e2e *the refresh queue drains* |
+| 7 | `booking.cancelled` was rendered by notification but never produced | no cancellation email | the confirmed-cancel path writes reservation, booking and the event in one transaction | e2e *the customer is told about the cancellation, once* |
+| 8 | Waiting-room ETA: `admitIntervalMs ?? 1000 / 1000` parses as `?? 1` | wrong wait estimate whenever the interval was configured | parenthesised, with the interval as a real option | test *estimates the wait…* |
+| 9 | `BOOKING_WITHOUT_ALLOCATION` and `ORPHAN_PAYMENT` were declared kinds with no check; nothing looked for a confirmed seat with no booking | gaps in the safety net | three new checks (eleven in total), all money-flagged → human | three new reconciliation tests |
+| 10 | Gateway and notification header comments described a different order and a topic that wasn't consumed | misleading docs in code | comments corrected | — |
+| 11 | `TIMED_OUT` was a saga state nothing could reach | dead complexity | removed by migration 011 | full suite |
+
+### Found while fixing
+
+| # | Finding | Impact before | Fix |
+|---|---|---|---|
+| 12 | **`npm run migrate` failed on any fresh database**: the shared `001` and inventory's `011` both created the audit trigger | a new clone could not set up | new migration `010a` that runs only on fresh installs (applied files stay untouched, as the project's rule requires) |
+| 13 | The payment service's own resolver could settle a payment before the saga asked; the saga treated "not UNKNOWN" as unresolved | a correctly paid booking drifted to MANUAL_REVIEW | `resolveUnknown()` is idempotent: an already-settled payment returns its state |
+| 14 | After resolving an UNKNOWN payment the saga never recorded `payment_id` on the reservation | reconciliation would raise a false `CONFIRMED_WITHOUT_PAYMENT` five minutes later | recorded in the same transaction as the step |
+| 15 | Three services had no production check on the internal token, and config parsing silently produced `NaN` | weaker production safety | one shared config helper: validated numbers, secrets refused in production everywhere |
+| 16 | Elasticsearch indexing ignored the circuit breaker search already respected | refreshes paid two timeouts each while ES was down | writes respect the breaker; resync re-indexes after recovery |
+
+### Clean-up (no behaviour change)
+
+`startRelay()` existed in three services, the config helper in eight, and
+hand-rolled `fetch` + `AbortController` + timer in six places (some readiness
+probes had no timeout at all). Each now has one shared implementation:
+`startOutboxRelay()`, `@tessera/shared/src/config`, `@tessera/shared/src/http/client`.
+The `.env` loader moved from inside the inventory service to the shared package.
+
+### Still open (worth knowing)
+
+- A charge request delayed in flight past the saga's 30 s timeout could create its
+  payment row after the saga concluded "never started". Reconciliation's
+  `PAYMENT_WITHOUT_BOOKING` check catches this for a human.
+- Reconciliation checks sample up to 500 rows per pass, so at large scale an old
+  issue can drop out of the sample and be marked "resolved itself".
 
 ## 5. Improvements you could talk about (roadmap ideas)
 
-- Fix the honest notes above (all small, local changes).
 - Run the k6 flash-sale script and record results; measure a horizontal scaling curve
   (1, 2, 4 reservation workers).
 - Read replicas for search; partition `allocations` by event date; archive old

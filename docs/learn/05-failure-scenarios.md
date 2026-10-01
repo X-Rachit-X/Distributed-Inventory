@@ -7,7 +7,8 @@ says **where it breaks**, **what state is left behind**, and **what brings it ba
 to correct**. Use this page to rehearse interview answers.
 
 Legend: ✅ handled automatically · 👤 handled by a human via reconciliation ·
-⚠️ known edge (see [06](06-resume-and-interview.md#4-honest-notes-from-reading-the-code)).
+⚠️ known edge. Several rows here were ⚠️ until the fixes listed in
+[06 §4](06-resume-and-interview.md#4-code-review-findings-and-what-was-done-about-them).
 
 ---
 
@@ -50,10 +51,10 @@ Legend: ✅ handled automatically · 👤 handled by a human via reconciliation 
 | after the consumer commits, before the offset commit | effect + marker committed | ✅ redelivery finds the marker → skipped |
 | Saga worker stopped **gracefully** mid-flight (deploy) | leases released by `releaseLeases()` | ✅ another worker resumes at once; the step deadline hasn't passed, so it **re-runs the step**, and the idempotency keys make that safe |
 | Saga worker **killed** after a *completed* step | saga in a stable state (e.g. HOLD_CREATED), lease until +60 s | ✅ lease expires → another worker continues (this is what the "abandoned mid-flight" test proves) |
-| `saga.after_hold_before_commit` (killed **inside** the hold step) | hold exists in inventory; saga in HOLD_PENDING with a 60 s lease and a **10 s step deadline** | ⚠️ by the time the lease expires the deadline has passed, so the next worker takes the **timeout path** HOLD_PENDING → HOLD_FAILED → COMPENSATED. The booking fails, and the orphan hold is reclaimed by its TTL (lazy reap / sweeper / reconciliation). Inventory stays correct; the customer must retry |
-| killed inside the payment step | saga PAYMENT_PENDING (45 s deadline) | ⚠️ timeout → PAYMENT_UNKNOWN, by design. But `paymentId` was never saved to the context, so resolution concludes "never reached the provider" → PAYMENT_FAILED → release. If money did move → 👤 `PAYMENT_WITHOUT_BOOKING` |
-| `saga.after_confirm_before_commit` (killed **inside** the confirm step) | seat CONFIRMED in inventory; saga CONFIRM_PENDING (15 s deadline) | ⚠️ timeout → REFUND_PENDING → refund → reservation CANCELLED. The money is safe, but the inventory allocation **stays CONFIRMED** for a cancelled reservation (the seat is lost for resale), and no current reconciliation check looks for "confirmed allocation without a booking" |
-| `payment.after_insert_before_charge` | payment row in `CREATED`, provider never called | ⚠️ see [06](06-resume-and-interview.md#4-honest-notes-from-reading-the-code): the resolver only scans `UNKNOWN`, and a replayed charge returns `CREATED`, which the saga treats as success. Reconciliation `CONFIRMED_WITHOUT_PAYMENT` → 👤 |
+| `saga.after_hold_before_commit` (killed **inside** the hold step) | hold exists in inventory; saga in HOLD_PENDING with a 60 s lease and a 10 s step deadline | ✅ the deadline has passed by the time the lease expires, but hold is idempotent, so the next worker **re-runs the step** (up to 3 attempts) and gets the same hold back. Only after the attempts run out does it time out to HOLD_FAILED |
+| killed inside the payment step | saga PAYMENT_PENDING (45 s deadline) | ✅ timeout → PAYMENT_UNKNOWN, by design (a charge is never re-sent blindly). The saga looks the payment up by its idempotency key `saga:<id>:payment` and asks the provider: no row → nothing was charged → release; a row → resolved to CAPTURED or FAILED |
+| `saga.after_confirm_before_commit` (killed **inside** the confirm step) | seat CONFIRMED in inventory; saga CONFIRM_PENDING (15 s deadline) | ✅ confirm is idempotent, so the next worker **re-runs it** (up to 5 attempts): inventory answers `alreadyConfirmed` and the booking is issued. If the attempts run out (inventory down for minutes) it refunds, and reconciliation's `ALLOCATION_WITHOUT_BOOKING` check flags the still-confirmed seat for a human 👤 |
+| `payment.after_insert_before_charge` | payment row in `CREATED`, provider never called | ✅ a replayed charge returns `CREATED`, which the saga treats as **not paid** → PAYMENT_UNKNOWN. After 120 s the resolver treats the row as abandoned, asks the provider (no record) → FAILED → seat released |
 | Any service gets SIGTERM (deploy) | — | ✅ readiness fails → 3 s drain → stop workers (release leases) → close pools |
 
 ## 4. Payment failures
@@ -65,7 +66,7 @@ Legend: ✅ handled automatically · 👤 handled by a human via reconciliation 
 | Provider timed out before the charge landed | UNKNOWN → resolve → `found: false` → FAILED → release | ✅ no money moved |
 | Provider returns 500 after capture | treated as indeterminate → UNKNOWN → resolve → CAPTURED | ✅ |
 | Provider unreachable for minutes | resolve retries with backoff `250 ms·2^n` (max 5 min); after 10 tries the saga → **MANUAL_REVIEW**; reconciliation `PAYMENT_UNKNOWN_TOO_LONG` | 👤 |
-| The payment *service* doesn't answer the saga within 30 s (e.g. `slow` mode = 40 s) | saga marks PAYMENT_UNKNOWN **without a paymentId** → "charge never reached the provider" → PAYMENT_FAILED → seat released. The payment service may still capture later | 👤 reconciliation `PAYMENT_WITHOUT_BOOKING` (money → human: confirm or refund) |
+| The payment *service* doesn't answer the saga within 30 s (e.g. `slow` mode = 40 s) | saga marks PAYMENT_UNKNOWN without a paymentId → finds the payment by its idempotency key → "charge still in progress" → retries with backoff → once the provider answers, CAPTURED → booking confirmed | ✅ charged exactly once (e2e check). Rare gap: a request delayed past the timeout *before* creating its row → 👤 `PAYMENT_WITHOUT_BOOKING` |
 | Paid, but the hold expired before confirm | confirm updates 0 rows → `HoldExpiredError` → REFUND_PENDING → refund → COMPENSATED | ✅ never a silent loss |
 | Refund call fails / unclear | refund row UNKNOWN → saga MANUAL_REVIEW | 👤 no blind payout retry |
 | Forged webhook | `signature_failures` row, 400, payment untouched | ✅ |

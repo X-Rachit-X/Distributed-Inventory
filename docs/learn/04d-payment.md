@@ -46,7 +46,7 @@ Correct: record UNKNOWN, then ASK the provider (by our idempotency key).
 Header rules: (1) a timeout is not a failure, (2) a bad signature never moves a
 payment, (3) every transition is guarded in SQL.
 
-### `charge()` (lines 268-346)
+### `charge()` (lines 58-159)
 
 | Step | Code | Why |
 |---|---|---|
@@ -58,18 +58,31 @@ payment, (3) every transition is guarded in SQL.
 | call | `provider.charge({idempotencyKey, amount, currency, reservationId, mode})` | our key goes to the provider too |
 | indeterminate error | `err.indeterminate` OR `PROVIDER_TIMEOUT` OR `httpStatus >= 500` → `#transition(CREATED → UNKNOWN, {failure_reason, next_resolve_at: +250ms})` → return `{state: 'UNKNOWN'}` | "Do NOT retry the charge — that is how a customer gets billed twice" |
 | definite error | other errors → FAILED | |
-| declined | `!result.ok` → FAILED + publish `payment.failed` | |
-| success | `#transition(CREATED → result.state, {provider ids})` + publish `payment.captured` | |
+| declined | `!result.ok` → FAILED with a `payment.failed` event | |
+| success | `#transition(CREATED → result.state, {provider ids}, payment.captured event)` | |
+| lost race | if any of those CAS updates finds the row already moved (the resolver or a webhook got there first), return the row's **current** state instead | the caller sees the truth, not what this call hoped for |
+| replay of a stuck charge | a duplicate key whose row is still `CREATED` returns `CREATED`; the saga treats that as "not paid" → PAYMENT_UNKNOWN | before the fix, the saga read `CREATED` as success |
 
-### `resolveUnknown(paymentId)` (lines 354-415)
+### `resolveUnknown(paymentId)` (lines 161-259)
 
-1. Load only if still `UNKNOWN` (else `{resolved: false, reason: 'not in UNKNOWN state'}`).
+0. **Idempotent.** Already definite (CAPTURED, AUTHORIZED, FAILED, CANCELLED) → return
+   `{resolved: true}` with that state (CANCELLED reads as FAILED), so a saga that
+   lost the race to the resolver or a webhook still completes. `CREATED` older than
+   `STALE_CREATED_SECONDS` (120 s) → treated as abandoned: moved to UNKNOWN first.
+   Younger `CREATED` → `{resolved: false, reason: 'charge still in progress'}`.
+   Refund states → `{resolved: false}`.
+1. Load the UNKNOWN row.
 2. `provider.getStatus({idempotencyKey, providerPaymentId})`.
 3. Provider unreachable → `resolve_attempts+1`, `next_resolve_at = now + min(300 s, 250 ms·2^attempts)` → `{resolved: false}`. **Never guess.**
-4. `found: false` → no money moved → UNKNOWN → FAILED, publish `payment.failed`.
-5. Otherwise map the provider's state (CAPTURED / AUTHORIZED / else FAILED) → transition + publish (with `resolved_from_unknown: true`).
+4. `found: false` → no money moved → UNKNOWN → FAILED with a `payment.failed` event.
+5. Otherwise map the provider's state (CAPTURED / AUTHORIZED / else FAILED) → transition with its event (`resolved_from_unknown: true`).
 
-### `handleWebhook({rawBody, signature, timestamp, sourceIp})` (lines 424-526)
+### `findByIdempotencyKey(key)` (lines 442-450)
+
+Returns `{paymentId, state}` or `null`. The saga uses it when a charge's response
+was lost and it never learned the payment id.
+
+### `handleWebhook({rawBody, signature, timestamp, sourceIp})` (lines 261-370)
 
 | Step | Code | Why |
 |---|---|---|
@@ -84,7 +97,7 @@ payment, (3) every transition is guarded in SQL.
 | same state | mark processed, `already_in_state` | |
 | apply | UPDATE state + mark processed + **outbox `payment.events` in the same transaction** | |
 
-### `refund()` (lines 535-602)
+### `refund()` (lines 372-440)
 
 1. Key required. Existing refund with this key → return it (`replayed`).
 2. Payment must be CAPTURED or PARTIALLY_REFUNDED, else 409 `PAYMENT_NOT_REFUNDABLE`.
@@ -94,23 +107,20 @@ payment, (3) every transition is guarded in SQL.
    PARTIALLY_REFUNDED. **Error → refund `UNKNOWN`, left for a human** ("a duplicate
    refund is a real loss").
 
-### `#transition(id, from, to, fields)` (lines 616-644)
+### `#transition(id, from, to, fields, event)` (lines 473-516)
 
 Builds `UPDATE payments SET state = $3 [, field = $n …] WHERE id = $1 AND state = $2`.
 `rowCount 0` → log "state moved concurrently" and return `false`. **CAS again.**
 
-### `#publish(paymentId, type, payload)` (lines 646-658)
+When an `event` is passed, the same transaction also does `nextSeq(aggregate =
+reservation_id or payment id)` + `enqueue('payment.events', …)`. The state change and
+its event commit together, which is rule 7.
 
-Its own small transaction: `nextSeq(aggregate = reservation_id or payment id)` +
-`enqueue('payment.events', …)`.
-
-> 🔍 Note for the curious: in `charge()` and `resolveUnknown()` the state
-> transition and `#publish` are **two separate transactions** (the webhook path does
-> them in one). A crash exactly between them would update the payment but drop its
-> event. Today nothing consumes `payment.events`, and reconciliation compares
-> database state rather than events, so money correctness doesn't depend on it.
-> It is still a small deviation from the "change + event in one tx" rule. See
-> [06 · honest notes](06-resume-and-interview.md#4-honest-notes-from-reading-the-code).
+> 🔍 History: this used to be two separate transactions (`#transition`, then a
+> `#publish` helper). A crash between them would update the payment but drop its
+> event. Nothing consumed `payment.events` yet, so no money depended on it, but it
+> broke the "change + event in one tx" rule. See
+> [06 · code-review findings](06-resume-and-interview.md#4-code-review-findings-and-what-was-done-about-them).
 
 ---
 
@@ -148,9 +158,10 @@ Implementation details:
 ## `src/workers/resolver.worker.js`
 
 - "The most important background worker": each row is money of unknown fate.
-- `tick()`: a short transaction `SELECT id FROM payments WHERE state='UNKNOWN' AND
-  (next_resolve_at IS NULL OR <= now()) ORDER BY unknown_since FOR UPDATE SKIP LOCKED
-  LIMIT 20`. The lock is released when that tx ends, and the **provider calls happen
+- `tick()`: a short transaction `SELECT id FROM payments WHERE (state='UNKNOWN' AND
+  (next_resolve_at IS NULL OR <= now())) OR (state='CREATED' AND created_at < now() - 120 s)
+  … FOR UPDATE SKIP LOCKED LIMIT 20`. The second half picks up charges whose process
+  died between the INSERT and the provider call; before, nothing ever looked at them. The lock is released when that tx ends, and the **provider calls happen
   outside it**.
 - For each → `payments.resolveUnknown(id)`. Updates the `payment_unknown` gauge.
 - Loop: 250 ms if it resolved something, else 2 s.
@@ -164,6 +175,7 @@ Implementation details:
 | `POST /internal/payments/:id/resolve` | used by the saga |
 | `POST /internal/payments/:id/refund` | |
 | `GET /internal/payments/:id` | |
+| `GET /internal/payments/by-key/:key` | 404 when no payment has that idempotency key; used by the saga's `findByKey` |
 | `GET /admin/unresolved` | the UNKNOWN queue |
 | `POST /admin/provider-mode` | switch fake-provider mode at runtime (chaos) |
 
@@ -173,7 +185,7 @@ code is identical). Then the resolver and outbox relay start.
 
 ## `src/config/index.js`
 
-Port 4003, pool 10, provider mode from `PAYMENT_PROVIDER_MODE`. **In production it
+Built on the shared `config` helpers. Port 4003, pool 10, provider mode from `PAYMENT_PROVIDER_MODE`. **In production it
 throws if the internal token or the webhook secret is still the dev default.**
 
 Next: [04e · Gateway & pricing →](04e-gateway-pricing.md)

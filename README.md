@@ -40,7 +40,7 @@ in the database (never by counting HTTP responses):
 | **Row-lock queue + constraint (production)** | **1** | **186 ms** | **575** |
 | Redis lock + constraint | 1 (Redis leaked once; constraint caught it) | 10.6 ms | 11,364 |
 
-Plus: **40 integration tests** and **31 end-to-end checks** against the live stack —
+Plus: **50 integration tests** and **39 end-to-end checks** against the live stack —
 50 simultaneous customers for one seat (exactly one wins), idempotent replay, a
 declined payment releasing the seat, a provider timeout resolved to exactly one
 charge, segment resale, the admin policy refusing to seize a sold seat, forged
@@ -79,8 +79,8 @@ npm run console     # http://localhost:5173  (operator login: ops@tessera.dev)
 Proofs:
 
 ```bash
-npm test                                              # 40 integration tests
-npm run e2e                                           # 31 live end-to-end checks
+npm test                                              # 50 integration tests
+npm run e2e                                           # 39 live end-to-end checks
 npm run lab -- run --scenario 1000u-1r --strategy all # concurrency comparison
 npm run chaos -- kafka|redis|payment                  # failure scenarios
 ```

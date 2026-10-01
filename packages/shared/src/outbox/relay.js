@@ -259,3 +259,44 @@ class OutboxRelay {
 }
 
 module.exports = { OutboxRelay };
+
+/**
+ * Connect a Kafka producer and start a relay for one service.
+ *
+ * Every service with an outbox starts its relay the same way, so the wiring
+ * lives here rather than being copied into each `index.js`. Kafka being
+ * unreachable at boot is deliberately not fatal: outbox rows simply stay
+ * PENDING, and the relay catches up once it is started against a live broker.
+ *
+ * @returns {Promise<{relay: OutboxRelay, producer: object, stop: () => Promise<void>} | null>}
+ *   null when Kafka is not configured or not reachable.
+ */
+async function startOutboxRelay({ pool, logger, service, brokers, clientId = service }) {
+     if (!brokers) {
+          logger.warn('KAFKA_BROKERS not set; outbox relay disabled. Events will accumulate as PENDING.');
+          return null;
+     }
+     const { Kafka } = require('kafkajs');
+     const kafka = new Kafka({ clientId, brokers: brokers.split(','), retry: { retries: 8 } });
+     // Idempotent producer with one request in flight: Kafka itself drops a
+     // retried duplicate and cannot reorder two sends from this relay.
+     const producer = kafka.producer({ idempotent: true, maxInFlightRequests: 1 });
+     try {
+          await producer.connect();
+     } catch (err) {
+          logger.error('outbox relay failed to start; events will accumulate as PENDING', { error: err.message });
+          return null;
+     }
+     const relay = new OutboxRelay({ pool, producer, logger, service });
+     relay.start();
+     return {
+          relay,
+          producer,
+          async stop() {
+               await relay.stop();
+               await producer.disconnect().catch(() => {});
+          },
+     };
+}
+
+module.exports.startOutboxRelay = startOutboxRelay;

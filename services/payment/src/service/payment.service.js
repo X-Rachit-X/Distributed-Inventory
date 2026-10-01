@@ -29,6 +29,17 @@ const { metrics } = require('@tessera/shared/src/observability/metrics');
 const { failpoint } = require('@tessera/shared/src/failpoints');
 const { ConflictError, NotFoundError, BadRequestError } = require('@tessera/shared/src/errors');
 
+/**
+ * A payment left in CREATED for this long never got an outcome recorded: the
+ * process died after committing the row and before (or while) calling the
+ * provider. Far longer than any provider call is allowed to take, so a charge
+ * still in flight is never mistaken for an abandoned one.
+ */
+const STALE_CREATED_SECONDS = 120;
+
+/** States that are a definite answer about whether money moved. */
+const DEFINITE = new Set(['CAPTURED', 'AUTHORIZED', 'FAILED', 'CANCELLED']);
+
 class PaymentService {
      constructor({ pool, provider, logger }) {
           this.pool = pool;
@@ -106,20 +117,37 @@ class PaymentService {
           }
 
           if (!result.ok) {
-               await this.#transition(paymentId, 'CREATED', 'FAILED', { failure_reason: result.reason });
-               await this.#publish(paymentId, 'payment.failed', { reservation_id: reservationId, reason: result.reason });
+               await this.#transition(
+                    paymentId,
+                    'CREATED',
+                    'FAILED',
+                    { failure_reason: result.reason },
+                    { type: 'payment.failed', payload: { reservation_id: reservationId, reason: result.reason } }
+               );
                return { paymentId, state: 'FAILED', reason: result.reason };
           }
 
-          await this.#transition(paymentId, 'CREATED', result.state, {
-               provider_payment_id: result.providerPaymentId,
-               provider_ref: result.providerRef,
-          });
-          await this.#publish(paymentId, 'payment.captured', {
-               reservation_id: reservationId,
-               amount_cents: amountCents,
-               provider_payment_id: result.providerPaymentId,
-          });
+          const moved = await this.#transition(
+               paymentId,
+               'CREATED',
+               result.state,
+               { provider_payment_id: result.providerPaymentId, provider_ref: result.providerRef },
+               {
+                    type: 'payment.captured',
+                    payload: {
+                         reservation_id: reservationId,
+                         amount_cents: amountCents,
+                         provider_payment_id: result.providerPaymentId,
+                    },
+               }
+          );
+          if (!moved) {
+               // Someone else settled this payment while the provider call was
+               // in flight (the resolver, after it went stale). Report what the
+               // row actually says rather than what this call believed.
+               const current = await this.get(paymentId);
+               return { paymentId, state: current.state, providerPaymentId: current.provider_payment_id };
+          }
 
           return { paymentId, state: result.state, providerPaymentId: result.providerPaymentId };
      }
@@ -132,12 +160,31 @@ class PaymentService {
       */
      async resolveUnknown(paymentId) {
           const { rows } = await this.pool.query(
-               `SELECT id, reservation_id, idempotency_key, provider_payment_id, amount_cents, resolve_attempts
-                  FROM payments WHERE id = $1 AND state = 'UNKNOWN'`,
-               [paymentId]
+               `SELECT id, reservation_id, idempotency_key, provider_payment_id, amount_cents, resolve_attempts,
+                       state, created_at < now() - ($2 || ' seconds')::interval AS stale
+                  FROM payments WHERE id = $1`,
+               [paymentId, String(STALE_CREATED_SECONDS)]
           );
-          if (rows.length === 0) return { resolved: false, reason: 'not in UNKNOWN state' };
+          if (rows.length === 0) return { resolved: false, reason: 'no such payment' };
           const payment = rows[0];
+
+          // Idempotent: a payment someone already settled (the resolver worker,
+          // a webhook) answers with its settled state. Reporting "not UNKNOWN"
+          // as unresolved used to send a correctly paid booking to manual review.
+          if (DEFINITE.has(payment.state)) {
+               return { resolved: true, state: payment.state === 'CANCELLED' ? 'FAILED' : payment.state };
+          }
+          if (payment.state === 'CREATED') {
+               if (!payment.stale) return { resolved: false, reason: 'charge still in progress' };
+               // Abandoned mid-charge. Admit we don't know, then ask.
+               await this.#transition(paymentId, 'CREATED', 'UNKNOWN', {
+                    failure_reason: 'no outcome recorded; the charging process stopped',
+               });
+          } else if (payment.state !== 'UNKNOWN') {
+               // Refund states: money moved and is being returned. Not a
+               // question the booking flow can answer automatically.
+               return { resolved: false, reason: `payment is ${payment.state}` };
+          }
 
           let status;
           try {
@@ -160,34 +207,45 @@ class PaymentService {
 
           if (!status.found) {
                // The provider has no record, so no money moved. Safe to fail.
-               await this.#transition(paymentId, 'UNKNOWN', 'FAILED', {
-                    failure_reason: 'provider has no record of this charge',
-               });
-               await this.#publish(paymentId, 'payment.failed', {
-                    reservation_id: payment.reservation_id,
-                    reason: 'no_charge_at_provider',
-               });
+               await this.#transition(
+                    paymentId,
+                    'UNKNOWN',
+                    'FAILED',
+                    { failure_reason: 'provider has no record of this charge' },
+                    {
+                         type: 'payment.failed',
+                         payload: { reservation_id: payment.reservation_id, reason: 'no_charge_at_provider' },
+                    }
+               );
                return { resolved: true, state: 'FAILED' };
           }
 
           const target = status.state === 'CAPTURED' ? 'CAPTURED' : status.state === 'AUTHORIZED' ? 'AUTHORIZED' : 'FAILED';
 
-          await this.#transition(paymentId, 'UNKNOWN', target, {
-               provider_payment_id: status.providerPaymentId,
-               provider_ref: status.providerRef,
-               failure_reason: status.failureReason,
-          });
-
-          await this.#publish(
+          const moved = await this.#transition(
                paymentId,
-               target === 'FAILED' ? 'payment.failed' : 'payment.captured',
+               'UNKNOWN',
+               target,
                {
-                    reservation_id: payment.reservation_id,
-                    amount_cents: Number(payment.amount_cents),
                     provider_payment_id: status.providerPaymentId,
-                    resolved_from_unknown: true,
+                    provider_ref: status.providerRef,
+                    failure_reason: status.failureReason,
+               },
+               {
+                    type: target === 'FAILED' ? 'payment.failed' : 'payment.captured',
+                    payload: {
+                         reservation_id: payment.reservation_id,
+                         amount_cents: Number(payment.amount_cents),
+                         provider_payment_id: status.providerPaymentId,
+                         resolved_from_unknown: true,
+                    },
                }
           );
+          if (!moved) {
+               // Resolved concurrently (resolver worker vs saga). Same answer.
+               const current = await this.get(paymentId);
+               return { resolved: DEFINITE.has(current.state), state: current.state };
+          }
 
           this.logger.info('resolved indeterminate payment', { paymentId, state: target });
           return { resolved: true, state: target };
@@ -380,6 +438,17 @@ class PaymentService {
           }
      }
 
+     /** The payment created under an idempotency key, or null. */
+     async findByIdempotencyKey(idempotencyKey) {
+          const { rows } = await this.pool.query(
+               `SELECT id, reservation_id, customer_id, amount_cents, currency, state, provider,
+                       provider_payment_id, failure_reason, created_at, captured_at
+                  FROM payments WHERE idempotency_key = $1`,
+               [idempotencyKey]
+          );
+          return rows[0] ?? null;
+     }
+
      async get(paymentId) {
           const { rows } = await this.pool.query(
                `SELECT id, reservation_id, customer_id, amount_cents, currency, state, provider,
@@ -391,8 +460,17 @@ class PaymentService {
           return rows[0];
      }
 
-     /** Guarded transition. The expected state is part of the WHERE clause. */
-     async #transition(paymentId, fromState, toState, fields = {}) {
+     /**
+      * Guarded transition. The expected state is part of the WHERE clause.
+      *
+      * When `event` is given, the outbox row is written in the SAME
+      * transaction as the state change, so the event exists if and only if the
+      * change committed. (They used to be two transactions here: a crash
+      * between them changed the payment and silently dropped its event.)
+      *
+      * @returns {Promise<boolean>} false when the state had already moved
+      */
+     async #transition(paymentId, fromState, toState, fields = {}, event = null) {
           const sets = ['state = $3'];
           const values = [paymentId, fromState, toState];
           let i = 4;
@@ -403,12 +481,27 @@ class PaymentService {
                i += 1;
           }
 
-          const { rowCount } = await this.pool.query(
-               `UPDATE payments SET ${sets.join(', ')} WHERE id = $1 AND state = $2`,
-               values
-          );
+          const moved = await this.pool.withTransaction(async (client) => {
+               const { rowCount } = await client.query(
+                    `UPDATE payments SET ${sets.join(', ')} WHERE id = $1 AND state = $2`,
+                    values
+               );
+               if (rowCount === 0) return false;
+               if (event) {
+                    const aggregateId = event.payload.reservation_id ?? paymentId;
+                    const seq = await nextSeq(client, aggregateId);
+                    await enqueue(client, {
+                         topic: 'payment.events',
+                         type: event.type,
+                         aggregateId,
+                         aggregateSeq: seq,
+                         payload: { payment_id: paymentId, ...event.payload },
+                    });
+               }
+               return true;
+          });
 
-          if (rowCount === 0) {
+          if (!moved) {
                const { rows } = await this.pool.query(`SELECT state FROM payments WHERE id = $1`, [paymentId]);
                this.logger.warn('payment transition skipped; state moved concurrently', {
                     paymentId,
@@ -421,20 +514,6 @@ class PaymentService {
           metrics.paymentTransitions.inc({ from: fromState, to: toState });
           return true;
      }
-
-     async #publish(paymentId, type, payload) {
-          await this.pool.withTransaction(async (client) => {
-               const aggregateId = payload.reservation_id ?? paymentId;
-               const seq = await nextSeq(client, aggregateId);
-               await enqueue(client, {
-                    topic: 'payment.events',
-                    type,
-                    aggregateId,
-                    aggregateSeq: seq,
-                    payload: { payment_id: paymentId, ...payload },
-               });
-          });
-     }
 }
 
-module.exports = { PaymentService };
+module.exports = { PaymentService, STALE_CREATED_SECONDS };

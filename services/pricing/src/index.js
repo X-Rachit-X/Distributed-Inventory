@@ -15,7 +15,7 @@
  * scan, and a demand tier that is two seconds old is still the right tier.
  */
 
-require('../../inventory-engine/src/config/env');
+require('@tessera/shared/src/config/env');
 require('@tessera/shared/src/observability/tracing');
 
 const express = require('express');
@@ -24,14 +24,15 @@ const { createLogger } = require('@tessera/shared/src/observability/logger');
 const { createApp, asyncHandler, errorMiddleware, listen } = require('@tessera/shared/src/http/server');
 const { metrics } = require('@tessera/shared/src/observability/metrics');
 const { fare, TIERS } = require('@tessera/shared/src/pricing');
+const { httpRequest, isHealthy, isTimeout } = require('@tessera/shared/src/http/client');
 const { BadRequestError, NotFoundError, ServiceUnavailableError } = require('@tessera/shared/src/errors');
 
-const num = (v, d) => (v === undefined || v === '' ? d : Number(v));
+const { str, num } = require('@tessera/shared/src/config');
 const config = {
-     PORT: num(process.env.PRICING_PORT, 4007),
-     INVENTORY_URL: process.env.INVENTORY_URL || 'http://localhost:4001',
-     CACHE_TTL_MS: num(process.env.PRICING_CACHE_TTL_MS, 2000),
-     QUOTE_TTL_SECONDS: num(process.env.QUOTE_TTL_SECONDS, 600),
+     PORT: num('PRICING_PORT', 4007),
+     INVENTORY_URL: str('INVENTORY_URL', 'http://localhost:4001'),
+     CACHE_TTL_MS: num('PRICING_CACHE_TTL_MS', 2000),
+     QUOTE_TTL_SECONDS: num('QUOTE_TTL_SECONDS', 600),
 };
 
 const logger = createLogger('pricing');
@@ -67,19 +68,16 @@ async function cached(key, loader) {
 }
 
 async function inventoryGet(path) {
-     const controller = new AbortController();
-     const timer = setTimeout(() => controller.abort(), 4000);
+     let res;
      try {
-          const res = await fetch(`${config.INVENTORY_URL}${path}`, { signal: controller.signal });
-          if (res.status === 404) throw new NotFoundError('Event not found');
-          if (!res.ok) throw new ServiceUnavailableError(`inventory returned ${res.status}`);
-          return (await res.json()).data;
+          res = await httpRequest(`${config.INVENTORY_URL}${path}`, { timeoutMs: 4000 });
      } catch (err) {
-          if (err.name === 'AbortError') throw new ServiceUnavailableError('inventory did not respond in time');
+          if (isTimeout(err)) throw new ServiceUnavailableError('inventory did not respond in time');
           throw err;
-     } finally {
-          clearTimeout(timer);
      }
+     if (res.status === 404) throw new NotFoundError('Event not found');
+     if (!res.ok) throw new ServiceUnavailableError(`inventory returned ${res.status}`);
+     return res.body.data;
 }
 
 /**
@@ -106,7 +104,7 @@ const app = createApp({
           {
                name: 'inventory',
                critical: true,
-               check: async () => (await fetch(`${config.INVENTORY_URL}/health`)).ok,
+               check: () => isHealthy(config.INVENTORY_URL),
           },
      ],
 });

@@ -11,15 +11,16 @@
  * worse, may accept crafted ones.
  */
 
-require('../../inventory-engine/src/config/env');
+require('@tessera/shared/src/config/env');
 require('@tessera/shared/src/observability/tracing');
 
 const express = require('express');
 const { createPool } = require('@tessera/shared/src/db/pool');
+const { startOutboxRelay } = require('@tessera/shared/src/outbox/relay');
 const { createLogger } = require('@tessera/shared/src/observability/logger');
 const { createApp, asyncHandler, errorMiddleware, listen } = require('@tessera/shared/src/http/server');
 const { metrics } = require('@tessera/shared/src/observability/metrics');
-const { BadRequestError, UnauthorizedError } = require('@tessera/shared/src/errors');
+const { BadRequestError, UnauthorizedError, NotFoundError } = require('@tessera/shared/src/errors');
 
 const { PaymentService } = require('./service/payment.service');
 const { FakeProvider } = require('./providers/fake.provider');
@@ -145,6 +146,20 @@ app.post(
      })
 );
 
+/**
+ * Look a payment up by the idempotency key it was charged with. The saga uses
+ * this to recover a charge whose response it never received.
+ */
+app.get(
+     '/internal/payments/by-key/:key',
+     requireInternal,
+     asyncHandler(async (req, res) => {
+          const payment = await payments.findByIdempotencyKey(req.params.key);
+          if (!payment) throw new NotFoundError('No payment for this idempotency key');
+          res.json({ data: payment });
+     })
+);
+
 app.get(
      '/internal/payments/:paymentId',
      requireInternal,
@@ -193,27 +208,17 @@ app.use(errorMiddleware(logger));
 const resolver = new ResolverWorker({ pool, payments, logger });
 
 let relayHandle = null;
-async function startRelay() {
-     if (!config.KAFKA_BROKERS) {
-          logger.warn('KAFKA_BROKERS not set; outbox relay disabled');
-          return null;
-     }
-     const { Kafka } = require('kafkajs');
-     const { OutboxRelay } = require('@tessera/shared/src/outbox/relay');
-     const kafka = new Kafka({ clientId: 'payment', brokers: config.KAFKA_BROKERS.split(',') });
-     const producer = kafka.producer({ idempotent: true, maxInFlightRequests: 1 });
-     await producer.connect();
-     const relay = new OutboxRelay({ pool, producer, logger, service: 'payment' });
-     relay.start();
-     return { relay, producer };
-}
 
 async function main() {
      await pool.query('SELECT 1');
      resolver.start();
-     relayHandle = await startRelay().catch((err) => {
-          logger.error('outbox relay failed to start', { error: err.message });
-          return null;
+     // Kafka being unavailable must not stop the service: outbox rows wait as
+     // PENDING and the relay catches up. That is the point of the pattern.
+     relayHandle = await startOutboxRelay({
+          pool,
+          logger,
+          service: 'payment',
+          brokers: config.KAFKA_BROKERS,
      });
 
      listen({
@@ -223,10 +228,9 @@ async function main() {
           logger,
           workers: [
                { name: 'resolver', stop: () => resolver.stop() },
-               { name: 'outbox-relay', stop: () => relayHandle?.relay.stop() ?? Promise.resolve() },
+               { name: 'outbox-relay', stop: () => relayHandle?.stop() ?? Promise.resolve() },
           ],
           resources: [
-               { name: 'kafka', close: () => relayHandle?.producer.disconnect() ?? Promise.resolve() },
                { name: 'postgres', close: () => pool.end() },
           ],
      });

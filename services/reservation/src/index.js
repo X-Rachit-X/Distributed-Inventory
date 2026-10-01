@@ -17,24 +17,26 @@
  * that takes forty seconds all end at the same place.
  */
 
-require('../../inventory-engine/src/config/env');
+require('@tessera/shared/src/config/env');
 require('@tessera/shared/src/observability/tracing');
 
 const { createPool } = require('@tessera/shared/src/db/pool');
+const { startOutboxRelay } = require('@tessera/shared/src/outbox/relay');
 const { createLogger } = require('@tessera/shared/src/observability/logger');
 const { createApp, asyncHandler, errorMiddleware, listen } = require('@tessera/shared/src/http/server');
 const { withIdempotency } = require('@tessera/shared/src/idempotency');
+const { isHealthy } = require('@tessera/shared/src/http/client');
+const { enqueue, nextSeq } = require('@tessera/shared/src/outbox/writer');
 const { metrics } = require('@tessera/shared/src/observability/metrics');
 const {
      BadRequestError,
      NotFoundError,
      ConflictError,
      UnauthorizedError,
-     ServiceUnavailableError,
 } = require('@tessera/shared/src/errors');
 
 const { SagaOrchestrator } = require('./saga/orchestrator');
-const { HttpInventoryClient, HttpPaymentClient } = require('./clients');
+const { HttpInventoryClient, HttpPaymentClient, HttpPricingClient } = require('./clients');
 const { SagaWorker } = require('./workers/saga.worker');
 
 const config = require('./config');
@@ -62,6 +64,8 @@ const paymentsClient = new HttpPaymentClient({
      logger,
 });
 
+const pricing = new HttpPricingClient({ baseUrl: config.PRICING_URL, timeoutMs: config.PRICING_TIMEOUT_MS });
+
 const app = createApp({
      name: 'reservation',
      logger,
@@ -77,10 +81,7 @@ const app = createApp({
           {
                name: 'inventory-engine',
                critical: true,
-               check: async () => {
-                    const res = await fetch(`${config.INVENTORY_URL}/health`);
-                    return res.ok;
-               },
+               check: () => isHealthy(config.INVENTORY_URL),
           },
      ],
 });
@@ -148,8 +149,21 @@ app.post(
                );
           }
 
-          // Server-side price. Any `priceCents` the client sent is ignored.
-          const quote = await priceItems(eventId, items);
+          // Server-side price, quoted BEFORE the transaction opens. Any
+          // `priceCents` the client sent is ignored.
+          const seatItems = items.filter((i) => i.resourceId || i.resourceCode);
+          const quote =
+               seatItems.length === 0
+                    ? { byKey: new Map(), totalCents: 0, items: [] }
+                    : await pricing.quote(
+                           eventId,
+                           seatItems.map((i) => ({
+                                resourceId: i.resourceId,
+                                resourceCode: i.resourceCode,
+                                spanFrom: i.spanFrom ?? 0,
+                                spanTo: i.spanTo ?? 1,
+                           }))
+                      );
           const fareFor = (i) =>
                quote.byKey.get(`${i.resourceId ?? i.resourceCode}:${i.spanFrom ?? 0}:${i.spanTo ?? 1}`);
 
@@ -264,60 +278,6 @@ app.post(
      })
 );
 
-/**
- * Price the requested items server-side.
- *
- * Called BEFORE the database transaction opens: a network call inside a
- * transaction holds its connection and row locks for as long as the remote
- * service takes, which is how a slow dependency becomes pool exhaustion.
- *
- * Fails closed. If prices cannot be determined, nothing is sold — selling at an
- * unknown price is worse than a brief "try again".
- */
-async function priceItems(eventId, items) {
-     const seatItems = items.filter((i) => i.resourceId || i.resourceCode);
-     if (seatItems.length === 0) return { byKey: new Map(), totalCents: 0, items: [] };
-
-     const controller = new AbortController();
-     const timer = setTimeout(() => controller.abort(), 5000);
-     let res;
-     try {
-          res = await fetch(`${config.PRICING_URL}/v1/quote`, {
-               method: 'POST',
-               signal: controller.signal,
-               headers: { 'content-type': 'application/json' },
-               body: JSON.stringify({
-                    eventId,
-                    items: seatItems.map((i) => ({
-                         resourceId: i.resourceId,
-                         resourceCode: i.resourceCode,
-                         spanFrom: i.spanFrom ?? 0,
-                         spanTo: i.spanTo ?? 1,
-                    })),
-               }),
-          });
-     } catch (err) {
-          throw new ServiceUnavailableError(
-               err.name === 'AbortError' ? 'Pricing did not respond in time' : 'Pricing is unavailable'
-          );
-     } finally {
-          clearTimeout(timer);
-     }
-
-     const json = await res.json().catch(() => null);
-     if (res.status === 404) throw new NotFoundError(json?.error?.message || 'Seat not found');
-     if (res.status === 400) throw new BadRequestError(json?.error?.message || 'Invalid items');
-     if (!res.ok) throw new ServiceUnavailableError('Pricing is unavailable');
-
-     const quote = json.data;
-     const byKey = new Map();
-     for (const q of quote.items) {
-          byKey.set(`${q.resourceId}:${q.spanFrom}:${q.spanTo}`, q);
-          byKey.set(`${q.resourceCode}:${q.spanFrom}:${q.spanTo}`, q);
-     }
-     return { byKey, totalCents: quote.totalCents, items: quote.items, quoteId: quote.quoteId };
-}
-
 /** Progress. The client polls this after creating a reservation. */
 app.get(
      '/v1/reservations/:id',
@@ -387,7 +347,10 @@ app.get(
      })
 );
 
-/** Cancel. Idempotent, and safe to call at any point in the flow. */
+/**
+ * Cancel. Idempotent. Allowed once confirmed, or while seats are held and no
+ * charge has started; otherwise a retryable 409.
+ */
 app.post(
      '/v1/reservations/:id/cancel',
      requireCustomer,
@@ -405,18 +368,45 @@ app.post(
           }
 
           if (reservation.state === 'CONFIRMED') {
-               // A confirmed booking releases inventory and then refunds. The
-               // saga owns the refund so the money path stays in one place.
+               // A confirmed booking: release the inventory, record the
+               // cancellation and its event in ONE transaction, then refund.
                await inventory.cancelBooking({
                     bookingId: reservation.id,
                     reason: 'cancelled by customer',
                     idempotencyKey: `cancel:${reservation.id}`,
                });
-               await pool.query(
-                    `UPDATE reservations SET state = 'CANCELLED', failure_reason = 'cancelled by customer' WHERE id = $1`,
-                    [reservation.id]
-               );
-               if (reservation.payment_id) {
+               const refundDue = !!reservation.payment_id;
+               await pool.withTransaction(async (client) => {
+                    const { rowCount } = await client.query(
+                         `UPDATE reservations SET state = 'CANCELLED', failure_reason = 'cancelled by customer'
+                           WHERE id = $1 AND state = 'CONFIRMED'`,
+                         [reservation.id]
+                    );
+                    // A concurrent cancel already did this; don't announce it twice.
+                    if (rowCount === 0) return;
+                    await client.query(
+                         `UPDATE bookings SET state = 'CANCELLED', cancelled_at = now()
+                           WHERE reservation_id = $1 AND state = 'CONFIRMED'`,
+                         [reservation.id]
+                    );
+                    const seq = await nextSeq(client, reservation.id);
+                    await enqueue(client, {
+                         topic: 'booking.events',
+                         type: 'booking.cancelled',
+                         aggregateId: reservation.id,
+                         aggregateSeq: seq,
+                         correlationId: req.context.correlationId,
+                         payload: {
+                              reservation_id: reservation.id,
+                              customer_id: reservation.customer_id,
+                              reason: 'cancelled by customer',
+                              refund_initiated: refundDue,
+                         },
+                    });
+               });
+               if (refundDue) {
+                    // After the commit, never inside it: a provider call must not
+                    // hold database locks. The refund key makes a retry safe.
                     await paymentsClient
                          .refund({
                               paymentId: reservation.payment_id,
@@ -433,18 +423,33 @@ app.post(
                               })
                          );
                }
-               return res.json({ data: { reservationId: reservation.id, state: 'CANCELLED', refundInitiated: true } });
+               return res.json({
+                    data: { reservationId: reservation.id, state: 'CANCELLED', refundInitiated: refundDue },
+               });
           }
 
-          // Still in flight: let the saga compensate, so release and refund
-          // follow the same path they would on any other failure.
-          await pool.query(
+          // Still in flight. Cancelling is only safe while the saga rests in
+          // HOLD_CREATED: seats held, no charge started. The compensation path
+          // then releases the hold exactly as it would on any other failure.
+          //
+          // This is a compare-and-swap on that one state. In any other
+          // in-flight state a step is running or money may be moving, and the
+          // saga's state machine (enforced by a trigger) has no cancel arrow
+          // from there. The answer is a retryable 409, never a 500.
+          const { rowCount } = await pool.query(
                `UPDATE sagas SET state = 'RELEASE_PENDING', next_run_at = now(),
                                  lease_owner = NULL, lease_until = NULL
-                 WHERE reservation_id = $1
-                   AND state IN ('HOLD_CREATED','PAYMENT_PENDING','CREATED','HOLD_PENDING')`,
+                 WHERE reservation_id = $1 AND state = 'HOLD_CREATED'`,
                [reservation.id]
           );
+          if (rowCount === 0) {
+               const err = new ConflictError(
+                    'This booking is being processed and cannot be cancelled at this moment. Try again shortly.',
+                    'BOOKING_IN_PROGRESS'
+               );
+               err.retryAfterSeconds = 2;
+               throw err;
+          }
 
           res.status(202).json({
                data: { reservationId: reservation.id, state: 'CANCELLING', pollUrl: `/v1/reservations/${reservation.id}` },
@@ -470,7 +475,6 @@ function describeProgress(sagaState, reservationState) {
           REFUND_PENDING: 'Refunding your payment',
           COMPENSATED: reservationState === 'CANCELLED' ? 'Cancelled' : 'Not completed',
           MANUAL_REVIEW: 'Under review by our team',
-          TIMED_OUT: 'Timed out',
      };
      return map[sagaState] ?? 'In progress';
 }
@@ -483,27 +487,17 @@ const orchestrator = new SagaOrchestrator({ pool, inventory, payments: paymentsC
 const sagaWorker = new SagaWorker({ orchestrator, logger, options: { intervalMs: config.SAGA_INTERVAL_MS } });
 
 let relayHandle = null;
-async function startRelay() {
-     if (!config.KAFKA_BROKERS) {
-          logger.warn('KAFKA_BROKERS not set; outbox relay disabled');
-          return null;
-     }
-     const { Kafka } = require('kafkajs');
-     const { OutboxRelay } = require('@tessera/shared/src/outbox/relay');
-     const kafka = new Kafka({ clientId: 'reservation', brokers: config.KAFKA_BROKERS.split(',') });
-     const producer = kafka.producer({ idempotent: true, maxInFlightRequests: 1 });
-     await producer.connect();
-     const relay = new OutboxRelay({ pool, producer, logger, service: 'reservation' });
-     relay.start();
-     return { relay, producer };
-}
 
 async function main() {
      await pool.query('SELECT 1');
      sagaWorker.start();
-     relayHandle = await startRelay().catch((err) => {
-          logger.error('outbox relay failed to start', { error: err.message });
-          return null;
+     // Kafka being unavailable must not stop the service: outbox rows wait as
+     // PENDING and the relay catches up. That is the point of the pattern.
+     relayHandle = await startOutboxRelay({
+          pool,
+          logger,
+          service: 'reservation',
+          brokers: config.KAFKA_BROKERS,
      });
 
      listen({
@@ -513,10 +507,9 @@ async function main() {
           logger,
           workers: [
                { name: 'saga', stop: () => sagaWorker.stop() },
-               { name: 'outbox-relay', stop: () => relayHandle?.relay.stop() ?? Promise.resolve() },
+               { name: 'outbox-relay', stop: () => relayHandle?.stop() ?? Promise.resolve() },
           ],
           resources: [
-               { name: 'kafka', close: () => relayHandle?.producer.disconnect() ?? Promise.resolve() },
                { name: 'postgres', close: () => pool.end() },
           ],
      });

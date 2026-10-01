@@ -217,9 +217,10 @@ quoted server-side and stored on the hold; a client-sent price is ignored.
 
 ## 12. Reconciliation
 
-Eight checks compare services: duplicate booking, ledger drift, payment without
-booking, confirmed without payment, expired hold still allocated, payment UNKNOWN
-too long, stuck saga, outbox backlog. Rules:
+Eleven checks compare services: duplicate booking, ledger drift, payment without
+booking, confirmed without payment, booking without allocation, allocation without
+booking, orphan payment, expired hold still allocated, payment UNKNOWN too long,
+stuck saga, outbox backlog. Rules:
 
 - **Grace windows**, and an issue must be seen in **two passes** before action — no
   snapshot across databases is atomic.

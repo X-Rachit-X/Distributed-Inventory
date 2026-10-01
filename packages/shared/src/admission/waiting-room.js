@@ -120,6 +120,7 @@ const DEFAULTS = {
      maxActive: 100, // users allowed inside simultaneously
      dripPerTick: 10, // admitted per admission cycle
      sessionTtlMs: 600_000, // how long an admitted session stays valid
+     admitIntervalMs: 1_000, // how often the admission loop runs (for the ETA estimate)
      queueTtlSeconds: 3600,
 };
 
@@ -223,7 +224,9 @@ class WaitingRoom {
           // progress refreshes constantly, which is the load the waiting room
           // exists to prevent.
           const ahead = rank;
-          const perSecond = this.opts.dripPerTick / (this.opts.admitIntervalMs ?? 1000 / 1000);
+          // Admissions per second = drip per tick ÷ tick length in seconds. (This
+          // once read `admitIntervalMs ?? 1000 / 1000`, which parses as `?? 1`.)
+          const perSecond = this.opts.dripPerTick / ((this.opts.admitIntervalMs ?? 1000) / 1000);
           const etaSeconds = Math.ceil(ahead / Math.max(1, perSecond));
 
           return {

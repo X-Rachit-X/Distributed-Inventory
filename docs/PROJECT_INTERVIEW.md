@@ -189,7 +189,7 @@ exactly 10.
 **3. Invariant views** that every test, the reconciliation worker and the scoreboard share, so
 a benchmark cannot pass using a weaker check than reconciliation uses.
 
-**Total: 40 integration tests, all passing** against PostgreSQL 16 and Redis 7.
+**Total: 50 integration tests, all passing** against PostgreSQL 16 and Redis 7.
 
 **Q: What did the naive strategy actually do?**
 
@@ -601,8 +601,8 @@ credible.
 
 | Area | Status |
 |---|---|
-| Inventory engine, saga, payments (UNKNOWN), reconciliation, admission control | **Built, 40 integration tests** |
-| Eight HTTP services, gateway with RBAC, React console | **Built, 31 end-to-end checks** |
+| Inventory engine, saga, payments (UNKNOWN), reconciliation, admission control | **Built, 50 integration tests** |
+| Eight HTTP services, gateway with RBAC, React console | **Built, 39 end-to-end checks** |
 | Transactional outbox → Kafka, idempotent consumers, DLQ + replay, versioned events | **Built; survived a real multi-hour broker outage (931 events, none lost)** |
 | Search: Kafka-fed projection, Elasticsearch with PostgreSQL fallback, L1/L2 cache | **Built** |
 | Server-side pricing (distance × demand tier) | **Built** |

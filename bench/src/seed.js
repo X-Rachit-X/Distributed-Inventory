@@ -11,7 +11,7 @@
  *   node bench/src/seed.js --trains 5 --seats 72 --stops 8
  */
 
-require('../../services/inventory-engine/src/config/env');
+require('@tessera/shared/src/config/env');
 
 const { createPool } = require('@tessera/shared/src/db/pool');
 const { recordCapacity } = require('../../services/inventory-engine/src/engine/ledger');

@@ -203,6 +203,7 @@ producer and consumer catches the same class of bug at runtime.
 | 202-207 | metrics: publish latency (commit → publish), published count | |
 | 211-251 | `#recordFailure`: attempts ≥ 10 → `DEAD_LETTER` + error log + DLQ metric. Else `next_attempt_at = now() + random(0, min(60s, 100ms·2^attempts))`, store `last_error`, clear the lease | full jitter avoids synchronised retries after a broker outage |
 | 253-258 | `#reportPending` → `outbox_pending` gauge | |
+| 274-end | **`startOutboxRelay({pool, logger, service, brokers})`**: connect a producer and start the relay; returns `{relay, producer, stop()}`, or `null` when Kafka is unset or unreachable (logged, not fatal: events wait as PENDING) | the same 25 lines used to be copied into inventory-engine, reservation and payment |
 
 ---
 
@@ -260,6 +261,26 @@ Failpoint names in the code: `outbox.before_publish`,
 `expiry.after_claim_before_commit`, `saga.after_hold_before_commit`,
 `saga.after_confirm_before_commit`, `payment.after_insert_before_charge`.
 
+## `src/config/env.js` and `src/config/index.js`, settings
+
+- `env.js` loads the repo-root `.env` (moved here from inventory-engine, which ten
+  files across six services reached into).
+- `index.js`: `str(name, fallback)`, `num(name, fallback)` (a non-number throws at
+  boot, instead of silently becoming `NaN`), `flag(name)` (only `"true"`), and
+  `secret(name)`: a dev default outside production; in production a missing or dev
+  value refuses to boot. Every service's `config/index.js` is built from these, so
+  all of them now get that production check (three had none before).
+
+## `src/http/client.js`, outbound calls with a deadline
+
+`httpRequest(url, {method, headers, json, body, timeoutMs = 5000, as})` →
+`{status, ok, headers, body}`. One `AbortController` deadline covers the whole
+exchange **including reading the body**; a timeout is thrown as
+`UpstreamTimeoutError` with code `UPSTREAM_TIMEOUT` (for a payment that means
+UNKNOWN, not "failed"). It does not interpret status codes; each caller decides
+what a 404 or 409 means. Also `isHealthy(baseUrl)` for readiness probes and
+`isTimeout(err)`. It replaced six hand-written `fetch` + `AbortController` copies.
+
 ## `src/http/server.js`, the service shell
 
 | Lines | What | Why |
@@ -299,7 +320,7 @@ Failpoint names in the code: `outbox.before_publish`,
 | 139-148 | keys `wr:{eventId}:…`. The `{}` is a Redis Cluster hash tag that keeps all of an event's keys on one shard (Lua needs that) |
 | 152-176 | `join` → ticket, position (`ZRANK+1`), `rejoined` |
 | 181-195 | `admit` |
-| 199-237 | `status`: ADMITTED (+ a fresh token) / NOT_IN_QUEUE / QUEUED with position and an ETA estimate ("a rough estimate is far better than none: users given no progress refresh constantly") |
+| 199-237 | `status`: ADMITTED (+ a fresh token) / NOT_IN_QUEUE / QUEUED with position and an ETA estimate ("a rough estimate is far better than none: users given no progress refresh constantly"). The ETA divides by the real admit rate, `drip ÷ admitIntervalMs` (it used to assume one tick per second whatever the interval) |
 | 240-275 | `heartbeat`, `leave`, `stats` |
 | 279-284 | `issueToken`: `base64url(JSON{e,s,x}) + '.' + HMAC` |
 | 287-316 | `verifyToken`: split, recompute the HMAC, **`timingSafeEqual`**, parse, check expiry, check it is **bound to this event** (stops queue-jumping with a token from a quiet event) |
@@ -362,6 +383,6 @@ Token bucket: burst then deny; a **denied request costs nothing**; concurrent ca
 never exceed capacity; falls back locally when Redis is gone. Waiting room: stable
 FIFO positions; rejoin keeps your place; **5 concurrent instances never over-admit**;
 expired sessions free their slots; tokens verify, expire and are event-bound;
-heartbeat can't revive a lapsed session.
+heartbeat can't revive a lapsed session; the ETA follows the configured admit interval.
 
 Next: [04b · Inventory engine →](04b-inventory-engine.md)

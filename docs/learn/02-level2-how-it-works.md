@@ -26,7 +26,7 @@ Distributed-Inventory/
 │   ├── discovery/            :4006  search (Kafka consumer + ES/PG)
 │   └── pricing/              :4007  fares
 ├── lab/                      ← Contention Lab: 9+ locking strategies raced against each other
-├── bench/                    ← seed data, 31 end-to-end checks, k6 load script, raw results
+├── bench/                    ← seed data, 39 end-to-end checks, k6 load script, raw results
 ├── apps/console/             ← React UI (search, seat map, live booking progress, ops)
 ├── deploy/                   ← docker-compose, prometheus, grafana, kubernetes
 ├── scripts/                  ← start/stop all services, chaos scenarios
@@ -239,7 +239,7 @@ payment DB outbox ─relay─► Kafka payment.events      (published; no consum
 
 - The browser polls `GET /api/reservations/:id` and sees a human-readable `progress`
   ("Processing payment", "Booked").
-- Every 30 s, reconciliation runs 8 checks across the databases and keeps a
+- Every 30 s, reconciliation runs 11 checks across the databases and keeps a
   scoreboard where every counter should be 0.
 
 ## 5. The full saga state machine
@@ -280,7 +280,7 @@ A **database trigger** (`saga_transition_guard`) allows only these arrows.
 | Topic | Event types | Producer | Consumer |
 |---|---|---|---|
 | `inventory.events` | `inventory.held/confirmed/released/cancelled/expired/blocked/unblocked` | inventory-engine | discovery |
-| `booking.events` | `booking.confirmed` (v1, v2), `booking.cancelled` | reservation | notification |
+| `booking.events` | `booking.confirmed` (v1, v2) from the saga, `booking.cancelled` from the cancel endpoint | reservation | notification |
 | `payment.events` | `payment.captured/failed` | payment | (none yet) |
 | `*.dlq` | dead-lettered copies | consumers | operators |
 
@@ -330,8 +330,8 @@ npm run seed        # trains, stops, coaches, seats, meal pool, ledger opening b
 npm run start       # 8 services in the background, logs in .logs/
 npm run console     # http://localhost:5173  (log in as ops@tessera.dev for the operator view)
 
-npm test            # 40 integration tests
-npm run e2e         # 31 live checks
+npm test            # 50 integration tests
+npm run e2e         # 39 live checks
 npm run lab -- run --scenario 1000u-1r --strategy all
 npm run chaos -- kafka|redis|payment
 ```

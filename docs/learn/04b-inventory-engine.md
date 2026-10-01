@@ -10,13 +10,14 @@ oversell.
 inventory-engine/
 ├── sql/migrations/
 │   ├── 010_inventory_core.sql      tables + THE exclusion constraint
+│   ├── 010a_fresh_install_trigger_order.sql  fix: a fresh install migrates cleanly
 │   ├── 011_ledger_and_guards.sql   ledger, state-machine triggers, invariant views
 │   ├── 012_tighten_insert_guard.sql  fix: no direct CONFIRMED inserts
 │   ├── 013_lab_schema.sql          isolated tables for the Contention Lab
 │   └── 014_ledger_baseline.sql     fix: opening balance + better drift view
 ├── src/
 │   ├── index.js                    HTTP API + starts the sweeper and outbox relay
-│   ├── config/{index,env}.js       config; .env loader used by all services
+│   ├── config/index.js             config (built on the shared helpers)
 │   ├── engine/reserve.js           ⭐ the hot path
 │   ├── engine/confirm.js           confirm / release / cancel
 │   ├── engine/admin.js             block / unblock seats (operators)
@@ -66,6 +67,17 @@ The header comment (lines 1-31) is the project's thesis. Read it once.
 | ~251-257 | `invariant_duplicate_bookings` (I7) | same resource+span CONFIRMED more than once |
 | ~261-266 | `invariant_outbox_backlog` (I6) | PENDING for more than 60 s |
 | ~270-284 | `invariant_summary` | one row per invariant: name, severity, violation count |
+
+## `010a_fresh_install_trigger_order.sql`
+
+A fix found while setting up a clean test database. The shared
+`001_append_only.sql` creates the `audit_log_append_only` trigger, and 011 (written
+before the shared file existed) creates it again with a plain `CREATE TRIGGER`. On
+an existing database nothing happened, but on a **fresh** one 011 failed with
+"trigger already exists", so `npm run migrate` could not finish on a new clone.
+Applied files can't be edited (checksums), so this new file sorts between 010 and
+011 and drops the shared copy **only if 011 hasn't run yet**. The end state is the
+same either way: `audit_log` is append-only.
 
 ## `012_tighten_insert_guard.sql`
 
@@ -233,18 +245,19 @@ The events accept either the UUID or the `external_ref` (`id::text = $1 OR exter
 | `GET /admin/invariants` | public read-out | `invariant_summary`, sets metrics; **500 only for CRITICAL/HIGH** (corruption), MEDIUM is a "warning" (lag) |
 
 Startup (`main`): `SELECT 1` → start the expiry worker → start the outbox relay
-(only if `KAFKA_BROKERS` is set; producer `idempotent: true, maxInFlightRequests:
+with the shared `startOutboxRelay` (only if `KAFKA_BROKERS` is set; producer `idempotent: true, maxInFlightRequests:
 1`; a Kafka failure is logged but **doesn't stop the service**, and events just
 accumulate) → `listen` with workers and resources for graceful shutdown.
 
 The pool uses `LOCK_TIMEOUT_MS` (3 s): "waiting 30 s for a lock is worse for the
 user than a fast 409".
 
-## `src/config/index.js` and `env.js`
+## `src/config/index.js`
 
-- `env.js` is a tiny `.env` loader (also required by every other service). It
-  skips comments, strips quotes, and **real environment variables always win**.
-- `config/index.js`: `required()` and `num()` validators; PORT 4001; pool max 20;
+- The `.env` loader that used to live here moved to `packages/shared/src/config/env.js`,
+  because every service required it. It skips comments, strips quotes, and **real
+  environment variables always win**.
+- `config/index.js`: the shared `str` / `num` / `secret` helpers; PORT 4001; pool max 20;
   lock/statement timeouts; Kafka brokers; expiry batch; `INTERNAL_TOKEN`.
   **Production refuses to boot with `dev-internal-token`.**
 

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Reconciliation checks.
+ * Reconciliation checks (eleven).
  *
  * Each check answers one question of the form "these two services should agree
  * about X — do they?" and returns the disagreements.
@@ -208,6 +208,146 @@ const confirmedWithoutPayment = {
      },
 };
 
+/**
+ * A reservation confirmed in the reservation service with no confirmed seat in
+ * inventory. The customer holds a ticket for a seat the authority does not
+ * reserve for them, so the seat could be sold again.
+ *
+ * The booking id written on allocations is the reservation id.
+ */
+const bookingWithoutAllocation = {
+     name: 'BOOKING_WITHOUT_ALLOCATION',
+     graceSeconds: 120,
+     async run({ inventory, reservation, graceSeconds }) {
+          const { rows: confirmed } = await reservation.query(
+               `SELECT id FROM reservations
+                 WHERE state = 'CONFIRMED'
+                   AND updated_at < now() - ($1 || ' seconds')::interval
+                 LIMIT 500`,
+               [String(graceSeconds)]
+          );
+          if (confirmed.length === 0) return [];
+
+          const ids = confirmed.map((r) => r.id);
+          const { rows: held } = await inventory.query(
+               `SELECT DISTINCT booking_id FROM allocations
+                 WHERE booking_id = ANY($1::text[]) AND state = 'CONFIRMED'`,
+               [ids]
+          );
+          const allocated = new Set(held.map((r) => r.booking_id));
+
+          return ids
+               .filter((id) => !allocated.has(id))
+               .map((id) => ({
+                    kind: 'BOOKING_WITHOUT_ALLOCATION',
+                    severity: 'CRITICAL',
+                    entityType: 'reservation',
+                    entityId: id,
+                    expected: { allocation: 'CONFIRMED' },
+                    actual: { allocation: 'none' },
+                    detail: `reservation ${id} is confirmed but inventory holds no confirmed seat for it`,
+                    // A paying customer may not have a seat.
+                    moneyInvolved: true,
+                    recommendedAction: 're-confirm a seat for the customer if one is free, otherwise refund. Human decision.',
+               }));
+     },
+};
+
+/**
+ * A seat confirmed in inventory for a reservation that is not confirmed — the
+ * reverse of the check above. The seat is withheld from sale with no ticket
+ * behind it. Releasing it means cancelling a booking, which is never automatic.
+ */
+const allocationWithoutBooking = {
+     name: 'ALLOCATION_WITHOUT_BOOKING',
+     graceSeconds: 300,
+     async run({ inventory, reservation, graceSeconds }) {
+          const { rows: allocations } = await inventory.query(
+               `SELECT booking_id, array_agg(id) AS allocation_ids, min(event_id::text) AS event_id
+                  FROM allocations
+                 WHERE state = 'CONFIRMED'
+                   -- Age from creation: a booking normally confirms seconds after
+                   -- its hold, so a seat older than the grace window with no
+                   -- confirmed reservation is not in flight.
+                   AND created_at < now() - ($1 || ' seconds')::interval
+                 GROUP BY booking_id
+                 LIMIT 500`,
+               [String(graceSeconds)]
+          );
+          if (allocations.length === 0) return [];
+
+          // Booking ids are reservation ids for every booking the saga issues.
+          // Anything that is not a UUID was not issued by the saga, so it is
+          // left alone rather than reported.
+          const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+          const candidates = allocations.filter((a) => uuid.test(a.booking_id));
+          if (candidates.length === 0) return [];
+
+          const { rows: confirmed } = await reservation.query(
+               `SELECT id::text AS id FROM reservations WHERE id = ANY($1::uuid[]) AND state = 'CONFIRMED'`,
+               [candidates.map((a) => a.booking_id)]
+          );
+          const live = new Set(confirmed.map((r) => r.id));
+
+          return candidates
+               .filter((a) => !live.has(a.booking_id))
+               .map((a) => ({
+                    kind: 'ALLOCATION_WITHOUT_BOOKING',
+                    severity: 'HIGH',
+                    entityType: 'booking',
+                    entityId: a.booking_id,
+                    expected: { reservationState: 'CONFIRMED' },
+                    actual: { reservationState: 'not confirmed', allocations: a.allocation_ids.length },
+                    detail:
+                         `${a.allocation_ids.length} seat(s) are confirmed for booking ${a.booking_id}, ` +
+                         `but its reservation is not confirmed: capacity withheld with no ticket behind it`,
+                    // Freeing the seat cancels a booking; the customer may have been refunded or not.
+                    moneyInvolved: true,
+                    recommendedAction:
+                         'check whether the customer was refunded; if so, cancel the booking in inventory to free the seat',
+                    context: { eventId: a.event_id },
+               }));
+     },
+};
+
+/** A payment whose reservation does not exist at all. */
+const orphanPayment = {
+     name: 'ORPHAN_PAYMENT',
+     graceSeconds: 300,
+     async run({ payment, reservation, graceSeconds }) {
+          const { rows: payments } = await payment.query(
+               `SELECT id, reservation_id, amount_cents, state
+                  FROM payments
+                 WHERE created_at < now() - ($1 || ' seconds')::interval
+                   AND state IN ('CAPTURED','AUTHORIZED','UNKNOWN')
+                 ORDER BY created_at DESC
+                 LIMIT 500`,
+               [String(graceSeconds)]
+          );
+          if (payments.length === 0) return [];
+
+          const { rows: existing } = await reservation.query(
+               `SELECT id FROM reservations WHERE id = ANY($1::uuid[])`,
+               [payments.map((p) => p.reservation_id)]
+          );
+          const known = new Set(existing.map((r) => r.id));
+
+          return payments
+               .filter((p) => !known.has(p.reservation_id))
+               .map((p) => ({
+                    kind: 'ORPHAN_PAYMENT',
+                    severity: 'CRITICAL',
+                    entityType: 'payment',
+                    entityId: p.id,
+                    expected: { reservation: 'exists' },
+                    actual: { reservation: null, state: p.state },
+                    detail: `payment ${p.id} (${p.state}, ${p.amount_cents}) references reservation ${p.reservation_id}, which does not exist`,
+                    moneyInvolved: true,
+                    recommendedAction: 'find who created this charge; refund it if no booking can be matched',
+               }));
+     },
+};
+
 /** A saga that stopped progressing. */
 const stuckSaga = {
      name: 'STUCK_SAGA',
@@ -322,6 +462,9 @@ const ALL_CHECKS = [
      ledgerDrift,
      paymentWithoutBooking,
      confirmedWithoutPayment,
+     bookingWithoutAllocation,
+     allocationWithoutBooking,
+     orphanPayment,
      expiredHoldStillAllocated,
      paymentUnknownTooLong,
      stuckSaga,

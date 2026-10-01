@@ -161,7 +161,7 @@ responses):
 | Constraint alone | 1 ✅ but 609 deadlocks, very slow, which is why the row lock was added |
 | Redis lock + constraint | 1 ✅. Redis *leaked once*, and the database constraint caught it |
 
-Plus 40 integration tests and 31 end-to-end checks against the running system.
+Plus 50 integration tests and 39 end-to-end checks against the running system.
 
 ## 7. Why it's worth a place on a resume (short version)
 

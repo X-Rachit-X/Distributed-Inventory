@@ -19,7 +19,13 @@
  * than a new one.
  */
 
-const { ServiceUnavailableError, TesseraError } = require('@tessera/shared/src/errors');
+const {
+     ServiceUnavailableError,
+     TesseraError,
+     NotFoundError,
+     BadRequestError,
+} = require('@tessera/shared/src/errors');
+const { httpRequest, isTimeout } = require('@tessera/shared/src/http/client');
 
 /** Translate an HTTP error response into the shared error taxonomy. */
 function toError(status, body) {
@@ -39,30 +45,25 @@ class HttpInventoryClient {
      }
 
      async #call(path, body, idempotencyKey) {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+          let res;
           try {
-               const res = await fetch(`${this.baseUrl}${path}`, {
+               res = await httpRequest(`${this.baseUrl}${path}`, {
                     method: 'POST',
-                    signal: controller.signal,
+                    timeoutMs: this.timeoutMs,
                     headers: {
-                         'content-type': 'application/json',
                          'x-internal-token': this.internalToken,
                          ...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {}),
                     },
-                    body: JSON.stringify(body),
+                    json: body,
                });
-               const json = await res.json().catch(() => null);
-               if (!res.ok) throw toError(res.status, json);
-               return json?.data ?? json;
           } catch (err) {
-               if (err.name === 'AbortError') {
+               if (isTimeout(err)) {
                     throw new ServiceUnavailableError(`inventory engine timed out after ${this.timeoutMs}ms`);
                }
                throw err;
-          } finally {
-               clearTimeout(timer);
           }
+          if (!res.ok) throw toError(res.status, res.body);
+          return res.body?.data ?? res.body;
      }
 
      reserve(req) {
@@ -96,29 +97,16 @@ class HttpPaymentClient {
      }
 
      async #call(path, body, method = 'POST') {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+          let res;
           try {
-               const res = await fetch(`${this.baseUrl}${path}`, {
+               res = await httpRequest(`${this.baseUrl}${path}`, {
                     method,
-                    signal: controller.signal,
-                    headers: {
-                         'content-type': 'application/json',
-                         'x-internal-token': this.internalToken,
-                    },
-                    body: method === 'GET' ? undefined : JSON.stringify(body),
+                    timeoutMs: this.timeoutMs,
+                    headers: { 'x-internal-token': this.internalToken },
+                    json: method === 'GET' ? undefined : body,
                });
-               const json = await res.json().catch(() => null);
-               if (!res.ok) {
-                    const err = toError(res.status, json);
-                    // A 5xx from the payment service may mean the provider was
-                    // reached and we lost the answer. Treat it as unknown.
-                    if (res.status >= 500) err.indeterminate = true;
-                    throw err;
-               }
-               return json?.data ?? json;
           } catch (err) {
-               if (err.name === 'AbortError') {
+               if (isTimeout(err)) {
                     const timeout = new ServiceUnavailableError(
                          `payment service did not answer within ${this.timeoutMs}ms`
                     );
@@ -128,9 +116,15 @@ class HttpPaymentClient {
                     throw timeout;
                }
                throw err;
-          } finally {
-               clearTimeout(timer);
           }
+          if (!res.ok) {
+               const err = toError(res.status, res.body);
+               // A 5xx from the payment service may mean the provider was
+               // reached and we lost the answer. Treat it as unknown.
+               if (res.status >= 500) err.indeterminate = true;
+               throw err;
+          }
+          return res.body?.data ?? res.body;
      }
 
      charge(req) {
@@ -144,6 +138,70 @@ class HttpPaymentClient {
      }
      get(paymentId) {
           return this.#call(`/internal/payments/${paymentId}`, null, 'GET');
+     }
+
+     /**
+      * The payment created under an idempotency key, or null if none exists.
+      *
+      * How the saga recovers a charge whose response it never saw: the
+      * payment row is committed before the provider is called, so "no row"
+      * means the charge never started, and "a row" can be resolved by its id.
+      */
+     async findByKey(idempotencyKey) {
+          try {
+               const path = `/internal/payments/by-key/${encodeURIComponent(idempotencyKey)}`;
+               return await this.#call(path, null, 'GET');
+          } catch (err) {
+               if (err.status === 404) return null;
+               throw err;
+          }
+     }
+}
+
+/**
+ * Pricing client.
+ *
+ * Called by the reservation API BEFORE its database transaction opens: a
+ * network call inside a transaction holds its connection and row locks for as
+ * long as the remote service takes. Fails closed: if prices cannot be
+ * determined, nothing is sold.
+ */
+class HttpPricingClient {
+     constructor({ baseUrl, timeoutMs = 5_000 }) {
+          this.baseUrl = baseUrl.replace(/\/$/, '');
+          this.timeoutMs = timeoutMs;
+     }
+
+     /**
+      * Price seat items server-side. Any price the client sent is ignored.
+      *
+      * @returns {Promise<{ quoteId, totalCents, items, byKey: Map }>} `byKey` finds
+      *   a quoted item by `resourceId-or-code:spanFrom:spanTo`.
+      */
+     async quote(eventId, items) {
+          let res;
+          try {
+               res = await httpRequest(`${this.baseUrl}/v1/quote`, {
+                    method: 'POST',
+                    timeoutMs: this.timeoutMs,
+                    json: { eventId, items },
+               });
+          } catch (err) {
+               throw new ServiceUnavailableError(
+                    isTimeout(err) ? 'Pricing did not respond in time' : 'Pricing is unavailable'
+               );
+          }
+          if (res.status === 404) throw new NotFoundError(res.body?.error?.message || 'Seat not found');
+          if (res.status === 400) throw new BadRequestError(res.body?.error?.message || 'Invalid items');
+          if (!res.ok) throw new ServiceUnavailableError('Pricing is unavailable');
+
+          const quote = res.body.data;
+          const byKey = new Map();
+          for (const q of quote.items) {
+               byKey.set(`${q.resourceId}:${q.spanFrom}:${q.spanTo}`, q);
+               byKey.set(`${q.resourceCode}:${q.spanFrom}:${q.spanTo}`, q);
+          }
+          return { byKey, totalCents: quote.totalCents, items: quote.items, quoteId: quote.quoteId };
      }
 }
 
@@ -205,11 +263,15 @@ class InProcessPaymentClient {
      refund(req) {
           return this.service.refund(req);
      }
+     findByKey(idempotencyKey) {
+          return this.service.findByIdempotencyKey(idempotencyKey);
+     }
 }
 
 module.exports = {
      HttpInventoryClient,
      HttpPaymentClient,
+     HttpPricingClient,
      InProcessInventoryClient,
      InProcessPaymentClient,
      toError,

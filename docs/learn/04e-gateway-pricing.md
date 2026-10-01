@@ -36,7 +36,7 @@ unauthenticated flood costs one Redis round trip instead of a crypto check.
 
 | Lines | What | Why |
 |---|---|---|
-| 1-21 | comment: responsibilities and their order | |
+| 1-21 | comment: responsibilities and their order (load shed → rate limit → auth → waiting room → proxy; corrected to match the code) | |
 | 49-56 | `new Redis(url, { maxRetriesPerRequest: 2, enableOfflineQueue: false, retryStrategy })` + error handler | **no offline queue**: a rate-limit check that answers 30 s late is worse than an immediate local decision |
 | 58-68 | `TokenBucket`, `WaitingRoom` (max active, drip, session TTL from config) | |
 | 70-75 | `AdmissionLoop` every 1 s, metric on admit | |
@@ -50,7 +50,7 @@ unauthenticated flood costs one Redis round trip instead of a crypto check.
 | 235-242 | `requireRole(role)` → 403 | |
 | 248-279 | waiting room: `join` (tracks the event in the admission loop), `status`, `leave`; session = `x-session-id` or customer id | |
 | 287-305 | `requireAdmission`: only if `WAITING_ROOM_ENABLED`; verify the signed token **without Redis**, bound to `body.eventId`; invalid → 429 `WAITING_ROOM_REQUIRED` | users already inside survive a Redis outage |
-| 318-359 | **`proxy(targetBase, rewrite)`**: `fetch` with timeout (`UPSTREAM_TIMEOUT_MS` 10 s), headers `x-internal-token`, `x-request-id`, `x-correlation-id`, `x-customer-id`, `x-actor` (the email, for audit logs), `idempotency-key`; **pass the upstream status through unchanged** (a 409 must stay a 409); copy `retry-after`; timeout → 503 | |
+| 320-359 | **`proxy(targetBase, rewrite)`**: the shared `httpRequest` (`as: 'text'`, so the body is relayed byte for byte) with a deadline (`UPSTREAM_TIMEOUT_MS` 10 s), headers `x-internal-token`, `x-request-id`, `x-correlation-id`, `x-customer-id`, `x-actor` (the email, for audit logs), `idempotency-key`; **pass the upstream status through unchanged** (a 409 must stay a 409); copy `retry-after`; timeout → 503 | |
 | 361 | `express.json()` | |
 | 364-490 | the route table ↓ | |
 
@@ -91,7 +91,7 @@ identity provider, and nothing downstream would change.
 
 ### `src/config/index.js`
 
-Upstream URLs (4001-4007), `OPERATOR_EMAILS`, Redis URL, secrets
+Built on the shared `str` / `num` / `flag` / `secret` helpers. Upstream URLs (4001-4007), `OPERATOR_EMAILS`, Redis URL, secrets
 (`INTERNAL_TOKEN`, `JWT_SECRET`, `WAITING_ROOM_SECRET`), JWT TTL 3600 s, allowed
 origins (Vite dev 5173 / preview 4173), upstream timeout 10 s, max event-loop lag
 500 ms, waiting room **off by default** ("a waiting room in front of an uncontended
@@ -109,7 +109,7 @@ refuses any dev secret.**
 | 1-16 | comment: never trust client prices ("the classic way a booking system sells a first-class seat for one rupee"); caches availability for ~2 s because a 2-second-old demand tier is still correct | |
 | 29-35 | config: port, inventory URL, cache TTL 2000 ms, quote validity 600 s | |
 | 46-67 | **`cached(key, loader)` with single-flight**: fresh hit → return; otherwise if a load for this key is in flight, **return the same promise**; else start the load, store it in `inflight`, cache the result, and remove it from `inflight` in `finally` | prevents a cache stampede exactly when the system is busiest |
-| 69-83 | `inventoryGet(path)`: 4 s timeout; 404 → NotFound; other non-OK → 503 | |
+| 69-83 | `inventoryGet(path)`: shared `httpRequest`, 4 s deadline; 404 → NotFound; other non-OK → 503 | |
 | 89-100 | `spanSnapshot(eventId, from, to)` (cached): `/resources` + `/availability` in parallel → maps `byClass`, `byId`, `byCode`, `spanMax` | everything needed to price one span |
 | 121-183 | `POST /v1/quote`: validate (≤ 12 items, `spanTo > spanFrom`); per item: find the seat, class availability → **`fare()` from `@tessera/shared/src/pricing`**; return per-item `fareCents`, `basePriceCents`, `spanShare`, `tier {code,label,multiplier}`, `classAvailable/Total`, plus `quoteId`, `totalCents`, `validUntil` | a receipt can *explain* the price |
 | 186-199 | `GET /v1/fare-rules`: the tiers, so the UI needn't hard-code them | |

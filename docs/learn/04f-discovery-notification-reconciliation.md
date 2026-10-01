@@ -14,6 +14,7 @@ writes its own inbox, and reconciliation repairs only reversible inventory probl
 discovery/
 ├── sql/migrations/010_projection.sql      trips, trip_stops (trigram), trip_segments, dirty_events
 ├── sql/migrations/011_dirty_attempts.sql  poison handling for the refresh queue
+├── sql/migrations/012_dirty_lease.sql     lease_until, so the refresh runs outside a transaction
 ├── src/index.js                           search API + cache + Kafka consumer
 ├── src/projection.js                      refresher: rebuild a train's search rows
 └── src/search-index.js                    Elasticsearch client + circuit breaker + Postgres fallback
@@ -41,10 +42,10 @@ a Kafka partition.
 
 | Method | What |
 |---|---|
-| `#get(path)` | GET inventory with 8 s timeout; 404 → error with `notFound` |
+| `#get(path)` | GET inventory through the shared `httpRequest` with an 8 s deadline; 404 → error with `notFound` |
 | `static markDirty(client, eventId, reason)` | `INSERT dirty_events … ON CONFLICT DO UPDATE SET marked_at=now()`, **using the consumer's transaction client** (so the dedupe marker and the dirty mark commit together) |
 | `refresh(eventId)` | (1) fetch `segment-availability`, `span-points`, `/v1/events` in parallel. (2) 404, or the event is no longer active → delete from `trips` + clear its ES docs → `{removed:true}`. (3) price every segment with **the shared `fare()`**. (4) stop offsets: `metadata.offsetMinutes` or `position × 150 min`. (5) one tx: upsert `trips`, replace `trip_stops`, replace `trip_segments` (one multi-row insert). (6) build one ES document per (from, to) pair with per-class fields `avail_3A`, `fare_3A`, `tier_3A`…, `depart_at`, `arrive_at`, `travel_date`, `duration_minutes`, `min_fare`. (7) `index.indexTrip(docs)`. (8) `onRefresh` → bump the cache version |
-| `tick()` | tx: `SELECT event_id, attempts FROM dirty_events ORDER BY marked_at FOR UPDATE SKIP LOCKED LIMIT 10`; for each: refresh → delete the dirty row. Error → attempts+1 ≥ 5 → drop (resync re-adds it); else `attempts+1, marked_at=now()` (**back of the queue**) |
+| `tick()` | (1) short tx: lease ≤10 rows (`UPDATE … SET lease_until = now()+30s` over a `FOR UPDATE SKIP LOCKED` CTE, returning `marked_at::text`). (2) **no transaction open**: refresh each. (3) success → `DELETE … WHERE event_id=$1 AND marked_at=$2` — if a new event bumped `marked_at` meanwhile, nothing is deleted and the lease is cleared, so the train is refreshed again. Error → attempts+1 ≥ 5 → drop (resync re-adds it); else `attempts+1, marked_at=now()`, lease cleared (**back of the queue**) |
 | `resync()` | mark every active train dirty; delete trips that no longer exist |
 | `start({tickMs:1000, resyncMs:60000})` | refresher loop + periodic resync (one runs immediately) |
 | `staleness()` | oldest/newest `refreshed_at` + pending count → metric |
@@ -52,19 +53,19 @@ a Kafka partition.
 💡 **Coalescing**: 300 events for one train in a second → still one `dirty_events`
 row → one refresh.
 
-> 🔍 Note: `tick()` keeps its transaction (and the row locks on `dirty_events`) open
-> while `refresh()` makes HTTP calls to inventory and Elasticsearch. This is the one
-> place the code bends Rule 2 ("no network I/O inside a transaction"). The impact is
-> limited (a read-model DB, batches of 10, 8 s / 3 s timeouts), but a stricter
-> version would claim with a lease, release the tx, refresh, then delete.
+> 🔍 History: `tick()` used to keep its transaction (and the row locks) open while
+> `refresh()` made HTTP calls, the one place the code bent Rule 2. It now leases,
+> commits, refreshes, then deletes. One trap found on the way: comparing `marked_at`
+> through a JS `Date` loses Postgres's microseconds, so the DELETE never matched and
+> the queue never drained. Reading it as `marked_at::text` keeps it exact.
 
 ### `src/search-index.js`
 
 | Part | What |
 |---|---|
-| `ElasticIndex` | plain-HTTP client (3 s timeout); `healthy` flag; **circuit breaker**: `trip(err)` sets `retryAt = now + 10 s`; `available()` = healthy OR past `retryAt`. Fixes the old bug where one cold-start timeout disabled ES forever |
+| `ElasticIndex` | plain-HTTP client on `httpRequest` (3 s deadline); `healthy` flag; **circuit breaker**: `trip(err)` sets `retryAt = now + 10 s`; `available()` = healthy OR past `retryAt`. Fixes the old bug where one cold-start timeout disabled ES forever |
 | `init()` | create the index `tessera-trips` if missing: 1 shard, 0 replicas; **dynamic template** maps `avail_*`, `total_*`, `fare_*` to integer; explicit mapping for keyword/text/date fields |
-| `indexTrip(docs, eventId)` | `_delete_by_query` for that event, then a `_bulk` NDJSON upload. **No `refresh=true`** (forcing a refresh per write was the old search service's performance problem; the 1 s refresh interval is fine). Failure → `healthy=false`, Postgres stays current |
+| `indexTrip(docs, eventId)` | `_delete_by_query` for that event, then a `_bulk` NDJSON upload. **No `refresh=true`** (forcing a refresh per write was the old search service's performance problem; the 1 s refresh interval is fine). Skipped while the breaker is open; a failure trips the breaker (before, it only set `healthy=false`, so a dead ES was retried on every refresh). Postgres stays current |
 | `search(q)` | bool query: station clauses (`from`/`to`), train `multi_match` with fuzziness, filters on `travel_date`, depart/arrive time ranges, fare range on `fare_<class>` or `min_fare`, class, `onlyAvailable` → `avail_<class> > 0`; sort by departure; size 50. On error → `trip()` and rethrow |
 | `stationClause(side, input)` | `should`: exact code (boost 5) OR fuzzy label match (`prefix_length 1`) → "HWH", "howrah", "howra" all work |
 | `searchPostgres(db, q)` | the same search in SQL: join segments + trips + from/to stops; station match = `code = upper(input) OR word_similarity(input, label) > 0.5` (the comment explains why `word_similarity` beats `similarity`: "kanpr" scores 0.67 against its best word vs 0.24 against the whole label); fold per-class rows into one result per (trip, from, to) shaped like ES output; time filters in JS; max 50 |
@@ -111,10 +112,10 @@ email even if the dedupe marker were bypassed.
 | `GET /admin/dead-letters`, `POST /admin/dead-letters/replay` | internal token; replay uses `replayDeadLetters` |
 | `main()` | `startConsumer({ topics: ['booking.events'], readerVersion: { 'booking.confirmed': 2 } })`: reads v2, **v1 events are upcast**; other types are read as produced |
 
-> 🔍 Notes: the header comment says it consumes `payment.events` too, but the code
-> subscribes only to `booking.events`. And `render()` handles `booking.cancelled`,
-> but no service currently *produces* that event (the cancel path in reservation
-> doesn't enqueue it). Both are harmless, and good to know.
+> 🔍 History: the header comment used to say it consumed `payment.events` too (it
+> never did; now corrected), and `render()` handled `booking.cancelled` although no
+> service produced it. Reservation's cancel endpoint now enqueues it, in the same
+> transaction as the cancellation, and e2e checks one notification arrives.
 
 ---
 
@@ -123,10 +124,11 @@ email even if the dedupe marker were bypassed.
 ```
 reconciliation/
 ├── sql/migrations/010_reconciliation.sql   runs, issues, repair_log (append-only), scoreboard
-├── src/checks/index.js                     the 8 checks
+├── sql/migrations/011_allocation_without_booking.sql   adds the new issue kind to the CHECK
+├── src/checks/index.js                     the 11 checks
 ├── src/worker.js                           run → record → maybe repair → close resolved → snapshot
 ├── src/index.js                            scoreboard, issues, manual actions
-└── test/reconciliation.test.js             8 tests
+└── test/reconciliation.test.js             11 tests
 ```
 
 ### `010_reconciliation.sql`
@@ -135,7 +137,7 @@ reconciliation/
 |---|---|
 | comment | no cross-DB snapshot is atomic, so **grace window + re-check**; repair policy: inventory-only auto, money → recommendation + human |
 | `recon_runs` | each pass: checks run, found, repaired, duration |
-| `reconciliation_issues` | `kind` (10 kinds listed), `severity`, entity, `expected`/`actual` JSON, `detail`, **`money_involved`** (set by the check, at detection time), `repair_status` (`OPEN, AUTO_REPAIRED, AWAITING_HUMAN, REPAIRED_BY_HUMAN, RESOLVED_ITSELF, IGNORED`), `recommended_action`, **`seen_count`**, first/last seen. `UNIQUE (kind, entity_type, entity_id)` |
+| `reconciliation_issues` | `kind` (10 kinds listed; 011 adds `ALLOCATION_WITHOUT_BOOKING`), `severity`, entity, `expected`/`actual` JSON, `detail`, **`money_involved`** (set by the check, at detection time), `repair_status` (`OPEN, AUTO_REPAIRED, AWAITING_HUMAN, REPAIRED_BY_HUMAN, RESOLVED_ITSELF, IGNORED`), `recommended_action`, **`seen_count`**, first/last seen. `UNIQUE (kind, entity_type, entity_id)` |
 | `repair_log` + append-only trigger | every repair, automatic or human |
 | `scoreboard_snapshots` + view `scoreboard_current` | counts of open critical issues, duplicates, ledger mismatches, orphaned holds, payments without booking, stuck sagas, last run |
 
@@ -151,6 +153,9 @@ Three rules: **grace window**, **read-only**, **money is flagged**.
 | `DUPLICATE_BOOKING` | `invariant_duplicate_bookings` | CRITICAL / yes: "escalate immediately" |
 | `PAYMENT_WITHOUT_BOOKING` | captured > 300 s ago in the payment DB → collect `reservation_id`s → `SELECT … FROM reservations WHERE id = ANY($1) AND state='CONFIRMED'` in the reservation DB → the difference | CRITICAL / yes. **No cross-database join**: ids are collected and the other DB is queried |
 | `CONFIRMED_WITHOUT_PAYMENT` | the reverse direction | CRITICAL / yes |
+| `BOOKING_WITHOUT_ALLOCATION` | CONFIRMED reservations not updated for 120 s → their ids (the saga uses the reservation id as the booking id) → inventory has no CONFIRMED allocation for them | CRITICAL / yes: the customer paid and has no seat |
+| `ALLOCATION_WITHOUT_BOOKING` | CONFIRMED allocations older than 300 s (by `created_at`) whose booking id is a UUID → no CONFIRMED reservation with that id | HIGH / yes: a seat is sold to nobody (e.g. confirm succeeded but the saga refunded). Non-UUID booking ids come from seed or lab data and are skipped |
+| `ORPHAN_PAYMENT` | CAPTURED / AUTHORIZED / UNKNOWN payments older than 300 s whose `reservation_id` matches no reservation | CRITICAL / yes |
 | `STUCK_SAGA` | non-terminal and not updated for 120 s | HIGH if MANUAL_REVIEW else MEDIUM; money if in PAYMENT_UNKNOWN / MANUAL_REVIEW / REFUND_PENDING |
 | `PAYMENT_UNKNOWN_TOO_LONG` | UNKNOWN for > 600 s | CRITICAL / yes |
 | `OUTBOX_BACKLOG` | per service: PENDING or DEAD_LETTER older than 120 s | HIGH if dead letters else MEDIUM / no |
@@ -181,7 +186,7 @@ Three rules: **grace window**, **read-only**, **money is flagged**.
   re-opens with `seen_count=1` and runs a pass; `resolve` → `REPAIRED_BY_HUMAN`;
   `ignore` → `IGNORED`; always writes `repair_log` with the actor (`x-actor`).
 
-### `test/reconciliation.test.js` (8 tests)
+### `test/reconciliation.test.js` (11 tests)
 
 Detection: an expired hold still allocated, ledger drift (inventory moved without a
 ledger row), captured payment with no confirmed reservation, stalled saga. Policy:

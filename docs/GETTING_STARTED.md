@@ -94,8 +94,8 @@ A walk-through that shows what the system does:
 ## 6 · Run the proofs
 
 ```bash
-npm test                                           # 40 integration tests
-npm run e2e                                        # 31 end-to-end checks against the live stack
+npm test                                           # 50 integration tests
+npm run e2e                                        # 39 end-to-end checks against the live stack
 npm run lab -- run --scenario 1000u-1r --strategy all   # the concurrency comparison
 npm run lab -- list                                # every scenario and strategy
 ```

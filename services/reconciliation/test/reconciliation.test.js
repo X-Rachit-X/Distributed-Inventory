@@ -296,3 +296,68 @@ describe('scoreboard', () => {
           assert.ok(board.lastRunAt, 'the scoreboard must report when it was last refreshed');
      });
 });
+
+describe('detection: checks added after the code review', () => {
+     test('detects a confirmed reservation with no confirmed seat in inventory', async () => {
+          const { rows } = await resPool.query(
+               `INSERT INTO reservations (customer_id, event_ref, state, updated_at)
+                VALUES ('no-seat', 'evt-x', 'CONFIRMED', now() - interval '10 minutes') RETURNING id`
+          );
+          const reservationId = rows[0].id;
+          createdReservations.push(reservationId);
+
+          await worker.run();
+
+          const issue = await issueFor('BOOKING_WITHOUT_ALLOCATION', reservationId);
+          assert.ok(issue, 'a ticket with no seat behind it must be detected');
+          assert.equal(issue.severity, 'CRITICAL');
+          assert.equal(issue.money_involved, true);
+          assert.equal(issue.repair_status, 'AWAITING_HUMAN', 'a paying customer is involved: never automatic');
+     });
+
+     test('detects a seat confirmed for a reservation that is not confirmed', async () => {
+          const { holdId, allocationId } = await strandedHold('seat-no-ticket');
+          // Make the hold live again so it can be confirmed, as the saga would.
+          await invPool.query(
+               `UPDATE holds SET expires_at = now() + interval '1 hour' WHERE id = $1`,
+               [holdId]
+          );
+          await invPool.query(`UPDATE allocations SET expires_at = now() + interval '1 hour' WHERE hold_id = $1`, [holdId]);
+
+          // The reservation behind it was refunded and cancelled, but the seat
+          // stayed confirmed in inventory.
+          const { rows } = await resPool.query(
+               `INSERT INTO reservations (customer_id, event_ref, state)
+                VALUES ('seat-no-ticket', 'evt-x', 'CANCELLED') RETURNING id`
+          );
+          const reservationId = rows[0].id;
+          createdReservations.push(reservationId);
+          const { confirm } = require('../../inventory-engine/src/engine/confirm');
+          await invPool.withTransaction((c) => confirm(c, { holdId, bookingId: reservationId }));
+          await invPool.query(`UPDATE allocations SET created_at = now() - interval '1 hour' WHERE id = $1`, [allocationId]);
+
+          await worker.run();
+
+          const issue = await issueFor('ALLOCATION_WITHOUT_BOOKING', reservationId);
+          assert.ok(issue, 'capacity withheld with no ticket behind it must be detected');
+          assert.equal(issue.money_involved, true);
+          assert.equal(issue.repair_status, 'AWAITING_HUMAN', 'freeing the seat cancels a booking: never automatic');
+     });
+
+     test('detects a payment whose reservation does not exist', async () => {
+          const { rows } = await payPool.query(
+               `INSERT INTO payments (reservation_id, customer_id, amount_cents, idempotency_key, state, created_at)
+                VALUES ($1, 'ghost', 1200, $2, 'CREATED', now() - interval '20 minutes') RETURNING id`,
+               [crypto.randomUUID(), `recon-test-${crypto.randomUUID()}`]
+          );
+          const paymentId = rows[0].id;
+          createdPayments.push(paymentId);
+          await payPool.query(`UPDATE payments SET state = 'CAPTURED' WHERE id = $1`, [paymentId]);
+
+          await worker.run();
+
+          const issue = await issueFor('ORPHAN_PAYMENT', paymentId);
+          assert.ok(issue, 'money attached to no reservation at all must be detected');
+          assert.equal(issue.money_involved, true);
+     });
+});

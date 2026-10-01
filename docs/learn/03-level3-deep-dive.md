@@ -372,8 +372,13 @@ payment, the money was taken and nothing would ever finish the job.
 - **STEP_POLICY** per state: timeout, max attempts, where to go on timeout.
   ```js
   PAYMENT_PENDING: { timeoutMs: 45_000, maxAttempts: 1 /* never re-charge */, onTimeout: 'PAYMENT_UNKNOWN', indeterminateOnTimeout: true }
-  CONFIRM_PENDING: { timeoutMs: 15_000, maxAttempts: 5, onTimeout: 'REFUND_PENDING' }
+  CONFIRM_PENDING: { timeoutMs: 15_000, maxAttempts: 5, onTimeout: 'REFUND_PENDING', rerunOnDeadline: true }
   ```
+- **`rerunOnDeadline`** (hold and confirm): a worker that crashes mid-step leaves a
+  60 s lease, so the 10–15 s step deadline has always passed by the time another
+  worker can pick it up. For an idempotent step, "deadline passed" then means "run
+  it again", not "give up". Without this, a crash after a successful confirm would
+  refund a customer whose seat was in fact confirmed.
 - **Deterministic idempotency keys** per step: `saga:<id>:hold`, `:payment`,
   `:confirm`, `:release`, `:refund`.
 
@@ -394,7 +399,7 @@ payment, the money was taken and nothing would ever finish the job.
 |---|---|
 | Hold got 409 | `HOLD_FAILED → COMPENSATED`, reservation `FAILED` ("those seats were taken") |
 | Payment declined | `PAYMENT_FAILED → RELEASE_PENDING →` release hold `→ RELEASED → COMPENSATED` (both recorded in one tx so it can't get stuck) |
-| Payment error / timeout | `PAYMENT_UNKNOWN →` ask provider with backoff `250ms·2^n` → `AUTHORIZED`/`FAILED`, or after 10 tries `MANUAL_REVIEW` |
+| Payment error / timeout | `PAYMENT_UNKNOWN →` (no paymentId? look it up by key `saga:<id>:payment`; none → nothing was charged → `FAILED`) ask provider with backoff `250ms·2^n` → `AUTHORIZED`/`FAILED`, or after 10 tries `MANUAL_REVIEW` |
 | Confirm 409 / hold expired after payment | `REFUND_PENDING →` refund (key `saga:<id>:refund`) `→ COMPENSATED`; refund outcome unknown → `MANUAL_REVIEW` |
 | Generic step error | full-jitter reschedule; out of attempts → policy's `onTimeout` target |
 
@@ -443,12 +448,19 @@ The charge itself is never retried.
    `payment.after_insert_before_charge`).
 3. Provider error that is `indeterminate`, `PROVIDER_TIMEOUT` or HTTP ≥ 500 →
    `UNKNOWN` (with `next_resolve_at = now+250ms`). Any other error → `FAILED`.
-4. Success → guarded transition `CREATED → CAPTURED`, publish `payment.captured`.
+4. Success → guarded transition `CREATED → CAPTURED` with its `payment.captured`
+   event enqueued **in the same transaction**.
+5. A replay whose row is still `CREATED` (the first call died before the provider
+   answered) returns `CREATED`, which the saga treats as **not paid** → UNKNOWN.
 
 `resolveUnknown()` asks `provider.getStatus({ idempotencyKey })`:
 - provider can't be reached → back off (`250ms·2^attempts`, max 5 min). **Never guess.**
 - `found: false` → no money moved → `FAILED`.
 - otherwise → move to the provider's state.
+- **idempotent**: a payment that is already definite returns its state, so a saga
+  that lost the race to a webhook still completes.
+- the resolver worker also claims rows stuck in `CREATED` for more than 120 s (the
+  process died between the INSERT and the provider call) and resolves them the same way.
 
 The **fake provider** keeps its *own* in-memory books, separate from our DB. That is
 what makes `getStatus` meaningful, and it can inject `timeout_after_success`,
@@ -532,7 +544,7 @@ outage shouldn't look like data corruption.
 
 ## 13. Reconciliation: the auditor
 
-8 checks, each with a **grace window** and a **money flag**:
+11 checks, each with a **grace window** and a **money flag**:
 
 | Check | Grace | Money? | Auto-repair? |
 |---|---|---|---|---|
@@ -540,6 +552,9 @@ outage shouldn't look like data corruption.
 | LEDGER_DRIFT | 60 s | no | no (we don't know which side is wrong) |
 | PAYMENT_WITHOUT_BOOKING | 300 s | yes | no, a human decides confirm vs refund |
 | CONFIRMED_WITHOUT_PAYMENT | 300 s | yes | no |
+| BOOKING_WITHOUT_ALLOCATION | 120 s | yes | no: a booked customer has no seat |
+| ALLOCATION_WITHOUT_BOOKING | 300 s | yes | no: a seat is sold but nobody holds a booking for it |
+| ORPHAN_PAYMENT | 300 s | yes | no: a payment no reservation points to |
 | EXPIRED_HOLD_STILL_ALLOCATED | 120 s | no | **yes**: guarded UPDATE + ledger entry |
 | PAYMENT_UNKNOWN_TOO_LONG | 600 s | yes | no |
 | STUCK_SAGA | 120 s | if in a money state | **yes**: clear lease, run now (never MANUAL_REVIEW) |
@@ -611,12 +626,16 @@ flowchart LR
 
 - A consumer marks the train **dirty** (`dirty_events` upsert) in the dedupe
   transaction.
-- The refresher (1 s tick) claims ≤10 dirty rows with SKIP LOCKED, re-reads
+- The refresher (1 s tick) **leases** ≤10 dirty rows (`lease_until = now()+30s`,
+  SKIP LOCKED) in a short transaction, then, **outside any transaction**, re-reads
   `/segment-availability` + stops + events from inventory, **prices every segment
   with the shared fare function**, and rewrites `trips` / `trip_stops` /
   `trip_segments` plus the Elasticsearch documents.
   - **Coalescing**: a train emitting 300 events per second is refreshed at most once
     per tick.
+  - The row is deleted only if `marked_at` is unchanged. A new event during the
+    refresh bumps it, so the train is refreshed again rather than lost. (Before the
+    fix the HTTP calls ran inside the claiming transaction, breaking rule 2.)
   - Poison handling: a failure means attempts+1 and the row goes to the back of the
     queue. After 5 it is dropped (resync will re-add it if the train still exists).
     A 404 means "the train is gone": it is removed from search.
@@ -630,7 +649,7 @@ flowchart LR
   `ageSeconds`, `authoritative: false`.
 - **Versioned cache keys**: `discovery:search:<version>:<sha1(query)>`. Each refresh
   runs `INCR discovery:version`, so every old entry becomes unreachable.
-- **Circuit breaker**: an ES error → skip ES for 10 s, then try again.
+- **Circuit breaker**: an ES error, on search *or* on indexing → skip ES for 10 s, then try again.
 
 ---
 
@@ -671,7 +690,14 @@ tiers by class occupancy:  <50% ×1.0 · <80% ×1.1 · <95% ×1.25 · else ×1.5
   orchestrator restarts a clean process.
 - **Failpoints**: `failpoint('name')` is a no-op unless armed. Actions: `crash`
   (`process.exit(9)`, skipping all cleanup), `throw`, `delay`, `drop`.
-- **Config**: production refuses to start with dev secrets.
+- **Config** (`config/index.js`): `str` / `num` (a non-number fails at boot instead
+  of becoming `NaN`) / `flag` / `secret`. Every service uses it, and production
+  refuses to start with any dev secret.
+- **Outbound HTTP** (`http/client.js`): `httpRequest` puts one deadline on the whole
+  exchange, body included, and reports a timeout as `UPSTREAM_TIMEOUT`. Every
+  service-to-service call goes through it.
+- **Outbox relay starter** (`startOutboxRelay`): the Kafka-optional relay boot shared
+  by the three services that publish.
 - **Metrics**: conflicts counted separately from errors; `oversell_prevented_total`;
   `invariant_violations` (must stay 0); outbox pending and latency; consumer lag;
   saga transitions; payment unknown count.

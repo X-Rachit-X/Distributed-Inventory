@@ -473,3 +473,218 @@ describe('webhook handling', () => {
           );
      });
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// Edge cases found by reading the code (docs/learn/06 §4). Each test below
+// failed against the code before its fix.
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Tick until the saga reaches `target`, failing if it never does. */
+async function tickUntil(sagaId, target, maxTicks = 20) {
+     for (let i = 0; i < maxTicks; i++) {
+          if ((await sagaState(sagaId)).state === target) return;
+          const worked = await orchestrator.tick({ batchSize: 10 });
+          if (worked === 0) await new Promise((r) => setTimeout(r, 60));
+     }
+     assert.fail(`saga never reached ${target} (stuck in ${(await sagaState(sagaId)).state})`);
+}
+
+const sagaContext = async (sagaId) =>
+     (await resPool.query(`SELECT context FROM sagas WHERE id = $1`, [sagaId])).rows[0].context;
+
+const reservationRow = async (reservationId) =>
+     (await resPool.query(`SELECT state, payment_id FROM reservations WHERE id = $1`, [reservationId])).rows[0];
+
+describe('payments the saga never saw finish', () => {
+     test('a charge left in CREATED is never treated as paid', async () => {
+          const { eventId, resourceIds } = await seedEvent(invPool, { resourceCount: 1 });
+          createdEvents.push(eventId);
+          const { sagaId, reservationId } = await createReservation({
+               eventId,
+               resourceIds,
+               customerId: 'created-replay',
+          });
+          await tickUntil(sagaId, 'HOLD_CREATED');
+
+          // An earlier charge attempt committed its payment row, then the
+          // payment process died before calling the provider. No money moved.
+          const key = `saga:${sagaId}:payment`;
+          await payPool.query(
+               `INSERT INTO payments (reservation_id, customer_id, amount_cents, idempotency_key, provider)
+                VALUES ($1, 'created-replay', 1000, $2, 'fake')`,
+               [reservationId, key]
+          );
+
+          // The saga's charge is replayed and comes back CREATED.
+          await orchestrator.tick({ batchSize: 10 });
+          assert.equal(
+               (await sagaState(sagaId)).state,
+               'PAYMENT_UNKNOWN',
+               'CREATED is not proof of payment; the saga must ask, not confirm'
+          );
+
+          // Once the row is stale, resolution asks the provider, which has no
+          // record of it: the booking fails and the seat goes back on sale.
+          await payPool.query(`UPDATE payments SET created_at = now() - interval '10 minutes' WHERE idempotency_key = $1`, [
+               key,
+          ]);
+          await drive(40);
+
+          assert.notEqual((await reservationRow(reservationId)).state, 'CONFIRMED');
+          assert.equal((await sagaState(sagaId)).state, 'COMPENSATED');
+          assert.equal(await liveAllocations(eventId), 0, 'the seat must be released');
+          const { rows } = await payPool.query(`SELECT state FROM payments WHERE idempotency_key = $1`, [key]);
+          assert.equal(rows[0].state, 'FAILED');
+     });
+
+     test('a charge whose response was lost is found by its key and the booking completes', async () => {
+          const { eventId, resourceIds } = await seedEvent(invPool, { resourceCount: 1 });
+          createdEvents.push(eventId);
+          const { sagaId, reservationId } = await createReservation({
+               eventId,
+               resourceIds,
+               customerId: 'lost-response',
+          });
+          await tickUntil(sagaId, 'HOLD_CREATED');
+
+          // The charge succeeded, but the saga never received the answer (its
+          // call to the payment service timed out), so it holds no payment id.
+          const charged = await payments.charge({
+               reservationId,
+               customerId: 'lost-response',
+               amountCents: 1000,
+               idempotencyKey: `saga:${sagaId}:payment`,
+          });
+          assert.equal(charged.state, 'CAPTURED');
+          await resPool.query(`UPDATE sagas SET state = 'PAYMENT_PENDING' WHERE id = $1`, [sagaId]);
+          await resPool.query(
+               `UPDATE sagas SET state = 'PAYMENT_UNKNOWN', next_run_at = now(),
+                       step_deadline_at = now() + interval '5 minutes', lease_owner = NULL, lease_until = NULL,
+                       context = context - 'paymentId'
+                 WHERE id = $1`,
+               [sagaId]
+          );
+
+          await drive(30);
+
+          assert.equal((await sagaState(sagaId)).state, 'CONFIRMED', 'the customer paid, so the booking completes');
+          assert.equal((await reservationRow(reservationId)).payment_id, charged.paymentId);
+          const { rows } = await payPool.query(`SELECT count(*)::int AS n FROM payments WHERE reservation_id = $1`, [
+               reservationId,
+          ]);
+          assert.equal(rows[0].n, 1, 'exactly one charge');
+     });
+
+     test('resolution completes even when the payment was settled by someone else first', async () => {
+          const { eventId, resourceIds } = await seedEvent(invPool, { resourceCount: 1 });
+          createdEvents.push(eventId);
+          const { sagaId, reservationId } = await createReservation({
+               eventId,
+               resourceIds,
+               customerId: 'settled-first',
+               paymentMode: 'timeout_after_success',
+          });
+          await tickUntil(sagaId, 'PAYMENT_UNKNOWN');
+          const { paymentId } = await sagaContext(sagaId);
+
+          // The payment service's own resolver gets to it before the saga does.
+          const settled = await payments.resolveUnknown(paymentId);
+          assert.equal(settled.state, 'CAPTURED');
+
+          await drive(30);
+
+          assert.equal(
+               (await sagaState(sagaId)).state,
+               'CONFIRMED',
+               'an already-captured payment must not leave the saga waiting for an answer that came'
+          );
+          assert.equal(
+               (await reservationRow(reservationId)).payment_id,
+               paymentId,
+               'the reservation must record the payment, or reconciliation reports it as unpaid'
+          );
+     });
+
+     test('the payment resolver settles charges abandoned in CREATED, each with its event', async () => {
+          const { ResolverWorker } = require('../../../payment/src/workers/resolver.worker');
+          const neverCharged = `abandoned-${crypto.randomUUID()}`;
+          const charged = `abandoned-${crypto.randomUUID()}`;
+          for (const key of [neverCharged, charged]) {
+               await payPool.query(
+                    `INSERT INTO payments (reservation_id, customer_id, amount_cents, idempotency_key, provider, created_at)
+                     VALUES ($1, 'abandoned', 1000, $2, 'fake', now() - interval '10 minutes')`,
+                    [crypto.randomUUID(), key]
+               );
+          }
+          // The provider did take the money for one of them before the process died.
+          await provider.charge({ idempotencyKey: charged, amountCents: 1000 });
+
+          await new ResolverWorker({ pool: payPool, payments, logger: silentLogger }).tick();
+
+          const stateOf = async (key) =>
+               (await payPool.query(`SELECT id, state FROM payments WHERE idempotency_key = $1`, [key])).rows[0];
+          const a = await stateOf(neverCharged);
+          const b = await stateOf(charged);
+          assert.equal(a.state, 'FAILED', 'no record at the provider means no money moved');
+          assert.equal(b.state, 'CAPTURED', 'the provider took the money, so the payment is captured');
+
+          // The state change and its event commit together: exactly one each.
+          const events = async (paymentId, type) =>
+               (
+                    await payPool.query(
+                         `SELECT count(*)::int AS n FROM outbox_events WHERE payload->>'payment_id' = $1 AND event_type = $2`,
+                         [paymentId, type]
+                    )
+               ).rows[0].n;
+          assert.equal(await events(a.id, 'payment.failed'), 1);
+          assert.equal(await events(b.id, 'payment.captured'), 1);
+     });
+});
+
+describe('a worker that dies inside a step', () => {
+     test('re-runs the hold step instead of failing the booking', async () => {
+          const { eventId, resourceIds } = await seedEvent(invPool, { resourceCount: 1 });
+          createdEvents.push(eventId);
+          const { sagaId } = await createReservation({ eventId, resourceIds, customerId: 'died-in-hold' });
+
+          // The dead worker had marked the step started; its deadline has
+          // lapsed by the time anyone else may claim the saga.
+          await resPool.query(
+               `UPDATE sagas SET state = 'HOLD_PENDING', step_deadline_at = now() - interval '1 second', next_run_at = now()
+                 WHERE id = $1`,
+               [sagaId]
+          );
+
+          await drive(30);
+
+          assert.equal((await sagaState(sagaId)).state, 'CONFIRMED');
+     });
+
+     test('re-runs the confirm step instead of refunding a customer whose seat was confirmed', async () => {
+          const { eventId, resourceIds } = await seedEvent(invPool, { resourceCount: 1 });
+          createdEvents.push(eventId);
+          const { sagaId, reservationId } = await createReservation({
+               eventId,
+               resourceIds,
+               customerId: 'died-in-confirm',
+          });
+          await tickUntil(sagaId, 'PAYMENT_AUTHORIZED');
+          const { holdId, paymentId } = await sagaContext(sagaId);
+
+          // The dead worker's confirm committed in inventory, then it died
+          // before recording that, with the step's deadline now lapsed.
+          await invPool.withTransaction((c) => inventoryEngine.confirm(c, { holdId, bookingId: reservationId }));
+          await resPool.query(
+               `UPDATE sagas SET state = 'CONFIRM_PENDING', step_deadline_at = now() - interval '1 second',
+                       next_run_at = now(), lease_owner = NULL, lease_until = NULL
+                 WHERE id = $1`,
+               [sagaId]
+          );
+
+          await drive(30);
+
+          assert.equal((await sagaState(sagaId)).state, 'CONFIRMED', 'the seat is confirmed, so the booking is issued');
+          const { rows } = await payPool.query(`SELECT count(*)::int AS n FROM refunds WHERE payment_id = $1`, [paymentId]);
+          assert.equal(rows[0].n, 0, 'nobody may be refunded for a seat they hold');
+     });
+});

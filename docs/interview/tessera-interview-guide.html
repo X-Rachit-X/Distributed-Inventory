@@ -535,7 +535,7 @@ li { margin-bottom: 7px; }
           <tr><td class="wrapcell"><strong>Payment timeout</strong></td><td class="wrapcell">Treat as failed and retry: double charge.</td><td class="wrapcell"><code>UNKNOWN</code> state; resolver asks the provider; never re-charges.</td></tr>
           <tr><td class="wrapcell"><strong>Retry storms / double clicks</strong></td><td class="wrapcell">Check-then-act idempotency: two retries both pass the check.</td><td class="wrapcell">Claim-first: <code>INSERT … ON CONFLICT DO NOTHING</code>, request-hash check.</td></tr>
           <tr><td class="wrapcell"><strong>Flash-sale thundering herd</strong></td><td class="wrapcell">Rate limit only: random winners, retry storms.</td><td class="wrapcell">Waiting room (FIFO, signed admission tokens) + token bucket, both atomic Lua.</td></tr>
-          <tr><td class="wrapcell"><strong>Silent inconsistency</strong></td><td class="wrapcell">Hope. Or a customer complaint.</td><td class="wrapcell">Reconciliation: 8 checks, grace windows, two sightings, no auto-repair of money.</td></tr>
+          <tr><td class="wrapcell"><strong>Silent inconsistency</strong></td><td class="wrapcell">Hope. Or a customer complaint.</td><td class="wrapcell">Reconciliation: 11 checks, grace windows, two sightings, no auto-repair of money.</td></tr>
           <tr><td class="wrapcell"><strong>Cache stampede</strong></td><td class="wrapcell">TTL expires; 1,000 requests hit the DB at once.</td><td class="wrapcell">Single-flight, jittered TTL, versioned keys, L1 + L2.</td></tr>
           <tr><td class="wrapcell"><strong>Schema evolution of events</strong></td><td class="wrapcell">Change the payload; old consumers break.</td><td class="wrapcell">JSON Schema contracts, v1→v2 upcasters, per-type reader versions.</td></tr>
         </tbody>
@@ -657,7 +657,7 @@ publish(); COMMIT   <i>→ rollback leaves a lie on the bus</i></div>
         <thead><tr><th>Database</th><th>Tables</th><th>Notable rules</th></tr></thead>
         <tbody>
           <tr><td class="wrapcell"><strong>inventory</strong></td><td class="wrapcell">inventory_events, span_points, resource_groups, inventory_resources, holds, allocations, inventory_pools, pool_buckets, inventory_ledger</td><td class="wrapcell">Exclusion constraint; <code>held + confirmed ≤ capacity</code> for pools; append-only ledger; 8 invariant views</td></tr>
-          <tr><td class="wrapcell"><strong>reservation</strong></td><td class="wrapcell">reservations, reservation_items, bookings, sagas, saga_steps</td><td class="wrapcell">Saga transition trigger (18 states); unique <code>TSR-…</code> reference; append-only steps</td></tr>
+          <tr><td class="wrapcell"><strong>reservation</strong></td><td class="wrapcell">reservations, reservation_items, bookings, sagas, saga_steps</td><td class="wrapcell">Saga transition trigger (15 states); unique <code>TSR-…</code> reference; append-only steps</td></tr>
           <tr><td class="wrapcell"><strong>payment</strong></td><td class="wrapcell">payments, refunds, provider_events, signature_failures</td><td class="wrapcell">No path out of FAILED; refunds ≤ captured; unique provider event id (replay protection)</td></tr>
           <tr><td class="wrapcell"><strong>reconciliation</strong></td><td class="wrapcell">recon_runs, reconciliation_issues, repair_log, scoreboard_snapshots</td><td class="wrapcell">Unique issue per entity; append-only repair log</td></tr>
           <tr><td class="wrapcell"><strong>notification</strong></td><td class="wrapcell">notifications</td><td class="wrapcell">Unique <code>(source_event_id, template)</code> — second guard against duplicates</td></tr>
@@ -708,8 +708,8 @@ publish(); COMMIT   <i>→ rollback leaves a lie on the bus</i></div>
       <div class="tablewrap"><table>
         <thead><tr><th>Layer</th><th>Tool</th><th>What it proves</th></tr></thead>
         <tbody>
-          <tr><td class="wrapcell">Integration (40 tests)</td><td class="wrapcell"><code>node:test</code> against real PostgreSQL 16 + Redis 7 — no mocks</td><td class="wrapcell">Constraint, triggers, idempotency races, outbox, DLQ, saga paths, payment UNKNOWN, admission, reconciliation</td></tr>
-          <tr><td class="wrapcell">End-to-end (31 checks)</td><td class="wrapcell"><code>bench/src/e2e.js</code> against all 8 running services</td><td class="wrapcell">50 users for 1 seat → exactly 1 wins; idempotent replay; decline releases; timeout → one charge; segment resale; forged webhook rejected</td></tr>
+          <tr><td class="wrapcell">Integration (50 tests)</td><td class="wrapcell"><code>node:test</code> against real PostgreSQL 16 + Redis 7 — no mocks</td><td class="wrapcell">Constraint, triggers, idempotency races, outbox, DLQ, saga paths, payment UNKNOWN, admission, reconciliation</td></tr>
+          <tr><td class="wrapcell">End-to-end (39 checks)</td><td class="wrapcell"><code>bench/src/e2e.js</code> against all 8 running services</td><td class="wrapcell">50 users for 1 seat → exactly 1 wins; idempotent replay; decline releases; timeout → one charge; segment resale; forged webhook rejected</td></tr>
           <tr><td class="wrapcell">Concurrency lab</td><td class="wrapcell"><code>lab/</code> CLI, 9 strategies</td><td class="wrapcell">Relative safety and throughput under contention</td></tr>
           <tr><td class="wrapcell">Chaos</td><td class="wrapcell"><code>scripts/chaos.sh</code> (Kafka, Redis, payment faults) + failpoints</td><td class="wrapcell">Degradation without incorrectness</td></tr>
           <tr><td class="wrapcell">Load</td><td class="wrapcell">k6 flash-sale script</td><td class="wrapcell">Written; results not yet recorded</td></tr>
@@ -835,8 +835,8 @@ publish(); COMMIT   <i>→ rollback leaves a lie on the bus</i></div>
       <div class="tablewrap"><table>
         <thead><tr><th>Area</th><th>Status</th></tr></thead>
         <tbody>
-          <tr><td class="wrapcell">Inventory engine, saga, payments, reconciliation, admission</td><td class="wrapcell">Built — 40 integration tests</td></tr>
-          <tr><td class="wrapcell">8 services, gateway RBAC, React console</td><td class="wrapcell">Built — 31 end-to-end checks</td></tr>
+          <tr><td class="wrapcell">Inventory engine, saga, payments, reconciliation, admission</td><td class="wrapcell">Built — 50 integration tests</td></tr>
+          <tr><td class="wrapcell">8 services, gateway RBAC, React console</td><td class="wrapcell">Built — 39 end-to-end checks</td></tr>
           <tr><td class="wrapcell">Outbox → Kafka, idempotent consumers, DLQ + replay, versioned events</td><td class="wrapcell">Built — survived a real broker outage</td></tr>
           <tr><td class="wrapcell">Search (ES + PG fallback), pricing, observability</td><td class="wrapcell">Built</td></tr>
           <tr><td class="wrapcell">k6 flash-sale script</td><td class="wrapcell">Written; results not recorded</td></tr>

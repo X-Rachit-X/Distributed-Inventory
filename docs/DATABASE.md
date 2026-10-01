@@ -72,7 +72,7 @@ Views: `invariant_overlapping_allocations`, `invariant_oversold_pools`,
 | `reservations` | customer intent; `state PENDING/HELD/AWAITING_PAYMENT/CONFIRMED/FAILED/CANCELLED/EXPIRED`, `hold_id`, `payment_id`, `total_cents` |
 | `reservation_items` | seat/span or pool item, **server-quoted** `price_cents` |
 | `bookings` | the issued result; unique `reservation_id`, unique human `reference` (`TSR-…`) |
-| `sagas` | the durable saga: `state` (18 states), `attempts`, `next_run_at`, `step_deadline_at`, `lease_owner/lease_until`, `context jsonb` |
+| `sagas` | the durable saga: `state` (15 states), `attempts`, `next_run_at`, `step_deadline_at`, `lease_owner/lease_until`, `context jsonb` |
 | `saga_steps` | append-only transition history |
 
 Trigger `saga_transition_guard` encodes the allowed transitions (e.g.

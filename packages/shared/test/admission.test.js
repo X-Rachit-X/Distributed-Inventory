@@ -224,3 +224,22 @@ describe('waiting room', () => {
           );
      });
 });
+
+describe('waiting room estimate', () => {
+     test('estimates the wait from the drip rate and the admission interval', async () => {
+          const eventId = `eta-${Date.now()}`;
+          const wr = new WaitingRoom({
+               redis,
+               tokenSecret: 't',
+               options: { maxActive: 0, dripPerTick: 10, admitIntervalMs: 2000 },
+          });
+          let last;
+          for (let i = 0; i < 25; i++) last = await wr.join(eventId);
+          const status = await wr.status(eventId, last.sessionId);
+          // 24 people ahead, 10 admitted every 2 s = 5 per second → about 5 s.
+          // A precedence bug once divided by the interval in milliseconds and
+          // reported 24 s for any configured interval.
+          assert.equal(status.aheadOfYou, 24);
+          assert.equal(status.estimatedWaitSeconds, 5);
+     });
+});
