@@ -9,18 +9,19 @@
  *
  * Responsibilities, in the order a request meets them:
  *
- *   1. rate limit        — is this ONE client asking too often?
- *   2. waiting room      — how many people may be inside at all?
- *   3. authenticate      — who is this?
- *   4. proxy             — forward, with identity and correlation attached
+ *   1. load shedding     — is THIS instance saturated? (event-loop lag)
+ *   2. rate limit        — is this ONE client asking too often?
+ *   3. authenticate      — who is this? (per route)
+ *   4. waiting room      — on reserve only: was this user admitted? (signed token)
+ *   5. proxy             — forward, with identity and correlation attached
  *
- * The order matters. Rate limiting runs before authentication so an unauthenticated
- * flood costs one Redis round trip rather than a JWT verification. The waiting
- * room runs before the expensive work but after cheap rejection, because
- * admitting someone to a queue is more expensive than refusing an abusive client.
+ * The order matters. Cheap rejections come first: rate limiting runs before
+ * authentication, so an unauthenticated flood costs one Redis round trip rather
+ * than a JWT verification. The waiting-room check needs to know who is asking,
+ * so it follows authentication, and it verifies a signed token without Redis.
  */
 
-require('../../inventory-engine/src/config/env');
+require('@tessera/shared/src/config/env');
 require('@tessera/shared/src/observability/tracing');
 
 const express = require('express');
@@ -30,6 +31,7 @@ const Redis = require('ioredis');
 const { createLogger } = require('@tessera/shared/src/observability/logger');
 const { createApp, asyncHandler, errorMiddleware, listen } = require('@tessera/shared/src/http/server');
 const { TokenBucket, LIMITS } = require('@tessera/shared/src/admission/token-bucket');
+const { httpRequest, isHealthy, isTimeout } = require('@tessera/shared/src/http/client');
 const { WaitingRoom, AdmissionLoop } = require('@tessera/shared/src/admission/waiting-room');
 const { metrics, getEventLoopLagMs } = require('@tessera/shared/src/observability/metrics');
 const {
@@ -81,12 +83,12 @@ const app = createApp({
           {
                name: 'reservation',
                critical: true,
-               check: async () => (await fetch(`${config.RESERVATION_URL}/health`)).ok,
+               check: () => isHealthy(config.RESERVATION_URL),
           },
           {
                name: 'inventory',
                critical: true,
-               check: async () => (await fetch(`${config.INVENTORY_URL}/health`)).ok,
+               check: () => isHealthy(config.INVENTORY_URL),
           },
           // Redis loss costs acceleration, not correctness, so it must not
           // remove this instance from the load balancer.
@@ -320,13 +322,12 @@ function proxy(targetBase, rewrite) {
           const path = rewrite(req);
           const url = `${targetBase}${path}`;
 
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), config.UPSTREAM_TIMEOUT_MS);
-
+          let upstream;
           try {
-               const upstream = await fetch(url, {
+               upstream = await httpRequest(url, {
                     method: req.method,
-                    signal: controller.signal,
+                    timeoutMs: config.UPSTREAM_TIMEOUT_MS,
+                    as: 'text',
                     headers: {
                          'content-type': 'application/json',
                          'x-internal-token': config.INTERNAL_TOKEN,
@@ -338,23 +339,18 @@ function proxy(targetBase, rewrite) {
                     },
                     body: ['POST', 'PUT', 'PATCH'].includes(req.method) ? JSON.stringify(req.body ?? {}) : undefined,
                });
-
-               const body = await upstream.text();
-               // Pass the upstream status through unchanged. Collapsing a 409
-               // into a 500 here would make correct contention behaviour look
-               // like a server fault to the browser.
-               res.status(upstream.status);
-               const retryAfter = upstream.headers.get('retry-after');
-               if (retryAfter) res.set('retry-after', retryAfter);
-               res.type('application/json').send(body);
           } catch (err) {
-               if (err.name === 'AbortError') {
-                    throw new ServiceUnavailableError('Upstream service did not respond in time');
-               }
+               if (isTimeout(err)) throw new ServiceUnavailableError('Upstream service did not respond in time');
                throw err;
-          } finally {
-               clearTimeout(timer);
           }
+
+          // Pass the upstream status through unchanged. Collapsing a 409
+          // into a 500 here would make correct contention behaviour look
+          // like a server fault to the browser.
+          res.status(upstream.status);
+          const retryAfter = upstream.headers.get('retry-after');
+          if (retryAfter) res.set('retry-after', retryAfter);
+          res.type('application/json').send(upstream.body);
      });
 }
 

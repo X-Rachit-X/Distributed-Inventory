@@ -15,13 +15,15 @@
  *   node bench/src/e2e.js
  */
 
-require('../../services/inventory-engine/src/config/env');
+require('@tessera/shared/src/config/env');
 
 const { createPool } = require('@tessera/shared/src/db/pool');
 
 const INVENTORY = process.env.INVENTORY_URL || 'http://localhost:4001';
 const RESERVATION = process.env.RESERVATION_URL || 'http://localhost:4002';
 const PAYMENT = process.env.PAYMENT_URL || 'http://localhost:4003';
+const NOTIFICATION = process.env.NOTIFICATION_URL || 'http://localhost:4005';
+const DISCOVERY = process.env.DISCOVERY_URL || 'http://localhost:4006';
 const TOKEN = process.env.INTERNAL_TOKEN || 'dev-internal-token';
 
 const c = {
@@ -414,8 +416,110 @@ async function main() {
           check("another customer cannot read someone else's reservation", snoop.status === 404);
      }
 
-     // ── 9. The authoritative check ────────────────────────────────────────
-     console.log(`\n${c.bold}9 · Invariants after all of the above${c.reset}`);
+     // ── 9. Cancellation ───────────────────────────────────────────────────
+     console.log(`\n${c.bold}9 · Cancellation${c.reset}`);
+     {
+          const seat = await seatFor('SL');
+          const booked = await reserve(
+               'e2e-canceller',
+               { eventId, items: [{ resourceId: seat.id, spanFrom: 0, spanTo: 2 }] },
+               `e2e-cancel-${Date.now()}`
+          );
+          const reservationId = booked.body.data.reservationId;
+          await poll(reservationId, 'e2e-canceller');
+
+          const cancelled = await api(`${RESERVATION}/v1/reservations/${reservationId}/cancel`, {
+               method: 'POST',
+               headers: { 'x-customer-id': 'e2e-canceller' },
+          });
+          check(
+               'a confirmed booking can be cancelled, with a refund',
+               cancelled.status === 200 && cancelled.body?.data?.refundInitiated === true,
+               `HTTP ${cancelled.status} ${cancelled.body?.data?.state ?? cancelled.body?.error?.code ?? ''}`
+          );
+          const { rows } = await invPool.query(
+               `SELECT count(*)::int AS live FROM allocations
+                 WHERE resource_id = $1 AND state IN ('HELD','CONFIRMED','BLOCKED')`,
+               [seat.id]
+          );
+          check('the cancelled seat is back on sale', rows[0].live === 0, `${rows[0].live} live`);
+
+          // booking.cancelled → outbox → Kafka → notification, exactly once.
+          let notes = [];
+          for (let i = 0; i < 40 && notes.length === 0; i++) {
+               const inbox = await api(`${NOTIFICATION}/v1/notifications`, { headers: { 'x-customer-id': 'e2e-canceller' } });
+               notes = (inbox.body?.data ?? []).filter(
+                    (n) => n.reservation_id === reservationId && n.template === 'booking_cancelled'
+               );
+               if (notes.length === 0) await sleep(500);
+          }
+          check('the customer is told about the cancellation, once', notes.length === 1, `${notes.length} message(s)`);
+
+          // Cancelling while money may be moving is refused, retryably.
+          const slowSeat = await seatFor('SL');
+          const slow = await reserve(
+               'e2e-impatient',
+               { eventId, items: [{ resourceId: slowSeat.id, spanFrom: 0, spanTo: 2 }], paymentMode: 'slow' },
+               `e2e-slow-${Date.now()}`
+          );
+          const slowId = slow.body.data.reservationId;
+          let progress = null;
+          for (let i = 0; i < 40 && progress !== 'Processing payment'; i++) {
+               const r = await api(`${RESERVATION}/v1/reservations/${slowId}`, { headers: { 'x-customer-id': 'e2e-impatient' } });
+               progress = r.body?.data?.progress;
+               if (progress !== 'Processing payment') await sleep(250);
+          }
+          const early = await api(`${RESERVATION}/v1/reservations/${slowId}/cancel`, {
+               method: 'POST',
+               headers: { 'x-customer-id': 'e2e-impatient' },
+          });
+          check(
+               'cancelling mid-payment is refused with a retryable 409, not a 500',
+               early.status === 409 && early.body?.error?.code === 'BOOKING_IN_PROGRESS',
+               `HTTP ${early.status} ${early.body?.error?.code ?? ''}`
+          );
+
+          // The provider answers after 40 s, past the saga's 30 s timeout: the
+          // saga never sees the response, finds the payment by its key, and
+          // completes once the provider's answer is in.
+          const result = await poll(slowId, 'e2e-impatient', 120_000);
+          check('a charge that outlived the saga\'s timeout still completes the booking', result?.state === 'CONFIRMED', result?.state);
+          const { rows: pays } = await (async () => {
+               const payPool = createPool({
+                    connectionString:
+                         process.env.PAYMENT_DATABASE_URL || 'postgresql://tessera:tessera@localhost:5432/payment',
+                    name: 'e2e-pay',
+                    max: 1,
+               });
+               try {
+                    return await payPool.query(`SELECT count(*)::int AS n FROM payments WHERE reservation_id = $1`, [slowId]);
+               } finally {
+                    await payPool.end();
+               }
+          })();
+          check('…and the customer was charged exactly once', pays[0].n === 1, `${pays[0].n} payment(s)`);
+     }
+
+     // ── 10. Search read model ─────────────────────────────────────────────
+     console.log(`\n${c.bold}10 · Search read model${c.reset}`);
+     {
+          const search = await api(`${DISCOVERY}/v1/search?from=NDLS&to=HWH`);
+          check(
+               'search answers, labelled as not authoritative',
+               search.status === 200 && search.body?.data?.length > 0 && search.body?.authoritative === false,
+               `${search.body?.data?.length ?? 0} result(s) from ${search.body?.backend}`
+          );
+          let pending = null;
+          for (let i = 0; i < 40 && pending !== 0; i++) {
+               const status = await api(`${DISCOVERY}/v1/status`);
+               pending = status.body?.data?.staleness?.pendingRefreshes;
+               if (pending !== 0) await sleep(500);
+          }
+          check('the refresh queue drains (leased, no transaction held open)', pending === 0, `${pending} pending`);
+     }
+
+     // ── 11. The authoritative check ───────────────────────────────────────
+     console.log(`\n${c.bold}11 · Invariants after all of the above${c.reset}`);
      {
           const { rows } = await invPool.query(`SELECT * FROM invariant_summary`);
           for (const row of rows) {

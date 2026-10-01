@@ -1,5 +1,7 @@
 # API reference
 
+> 📍 **Reference page:** endpoint and event shapes. To see how a booking moves through these endpoints, read [learn/02](learn/02-level2-how-it-works.md). New here? Start at the [docs home](README.md).
+
 The browser talks only to the **gateway** on `:4000`, under `/api`. Everything
 else is internal and requires the `x-internal-token` header.
 

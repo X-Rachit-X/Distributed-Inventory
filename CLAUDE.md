@@ -46,7 +46,8 @@ optimisation, never a correctness dependency. **Do not weaken this.**
 ```
 packages/shared/   correctness primitives: pool, migrations, idempotency, outbox (writer+relay),
                    consumer dedupe + DLQ, event contracts, failpoints, admission (token bucket,
-                   waiting room), pricing rules, metrics, logging, tracing, HTTP shell
+                   waiting room), pricing rules, metrics, logging, tracing, HTTP shell,
+                   config helpers (str/num/secret), outbound httpRequest with a deadline
 services/
   gateway/          :4000  edge: rate limit, auth (HS256 JWT), RBAC, waiting room, load shedding, proxy
   inventory-engine/ :4001  the authority: reserve/confirm/release/cancel, ledger, expiry sweeper, admin block
@@ -57,7 +58,7 @@ services/
   discovery/        :4006  search read model: Kafka-driven projection, Elasticsearch + PG fallback, L1/L2 cache
   pricing/          :4007  server-side fares (distance share × demand tier)
 lab/                Contention Lab: 9 concurrency strategies, verified against DB rows
-bench/              seed.js, e2e.js (31 live checks), k6/flash-sale.js, results/
+bench/              seed.js, e2e.js (39 live checks), k6/flash-sale.js, results/
 apps/console/       React + Vite + Tailwind console (search, seat map, live saga, ops, scoreboard)
 deploy/             compose (profiles core/obs/app/lab), prometheus, grafana, k8s (kustomize)
 scripts/            start.sh / stop.sh / chaos.sh
@@ -74,8 +75,8 @@ npm run migrate     # plain-SQL migrations, checksummed, advisory-locked
 npm run seed        # 6 trains, 2016 seats, deterministic (seed 42)
 npm run start       # all 8 services, detached, logs in .logs/
 npm run console     # http://localhost:5173
-npm test            # 40 integration tests (needs postgres + redis)
-npm run e2e         # 31 end-to-end checks against the running stack
+npm test            # 50 integration tests (needs postgres + redis)
+npm run e2e         # 39 end-to-end checks against the running stack
 npm run lab -- run --scenario 1000u-1r --strategy all
 npm run chaos -- kafka|redis|payment
 npm run up:obs      # prometheus :9091, grafana :3002, jaeger :16687
@@ -92,6 +93,8 @@ Operator login in the console: `ops@tessera.dev`. Any other email is a customer.
 - One database per service (same Postgres instance locally). No cross-database joins;
   reconciliation is the documented exception (read-only).
 - Errors: `TesseraError` subclasses; 409 = expected contention, never a 500.
+- Service-to-service calls go through `@tessera/shared/src/http/client` (`httpRequest`),
+  and config through `@tessera/shared/src/config` — don't hand-roll `fetch` or env parsing.
 - Windows dev box: Git Bash has no `pkill`; `scripts/stop.sh` uses PowerShell.
   Shell heredocs containing apostrophes break — write files with the editor instead.
 

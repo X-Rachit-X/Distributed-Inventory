@@ -23,7 +23,7 @@
  * keys" step to get wrong.
  */
 
-require('../../inventory-engine/src/config/env');
+require('@tessera/shared/src/config/env');
 require('@tessera/shared/src/observability/tracing');
 
 const crypto = require('node:crypto');
@@ -39,17 +39,17 @@ const { UnauthorizedError, BadRequestError } = require('@tessera/shared/src/erro
 const { ElasticIndex, searchPostgres } = require('./search-index');
 const { Projection } = require('./projection');
 
-const num = (v, d) => (v === undefined || v === '' ? d : Number(v));
+const { str, num, secret } = require('@tessera/shared/src/config');
 const config = {
-     PORT: num(process.env.DISCOVERY_PORT, 4006),
-     DATABASE_URL: process.env.DISCOVERY_DATABASE_URL || 'postgresql://tessera:tessera@localhost:5432/discovery',
-     INVENTORY_URL: process.env.INVENTORY_URL || 'http://localhost:4001',
-     KAFKA_BROKERS: process.env.KAFKA_BROKERS || '',
-     REDIS_URL: process.env.REDIS_URL || 'redis://localhost:6379',
-     ELASTICSEARCH_URL: process.env.ELASTICSEARCH_URL || '',
-     INTERNAL_TOKEN: process.env.INTERNAL_TOKEN || 'dev-internal-token',
-     L1_TTL_MS: num(process.env.DISCOVERY_L1_TTL_MS, 1000),
-     L2_TTL_SECONDS: num(process.env.DISCOVERY_L2_TTL_SECONDS, 5),
+     PORT: num('DISCOVERY_PORT', 4006),
+     DATABASE_URL: str('DISCOVERY_DATABASE_URL', 'postgresql://tessera:tessera@localhost:5432/discovery'),
+     INVENTORY_URL: str('INVENTORY_URL', 'http://localhost:4001'),
+     KAFKA_BROKERS: str('KAFKA_BROKERS', ''),
+     REDIS_URL: str('REDIS_URL', 'redis://localhost:6379'),
+     ELASTICSEARCH_URL: str('ELASTICSEARCH_URL', ''),
+     INTERNAL_TOKEN: secret('INTERNAL_TOKEN'),
+     L1_TTL_MS: num('DISCOVERY_L1_TTL_MS', 1000),
+     L2_TTL_SECONDS: num('DISCOVERY_L2_TTL_SECONDS', 5),
 };
 
 const CONSUMER_GROUP = 'discovery-projection-v1';

@@ -1,5 +1,7 @@
 # Architecture — how Tessera works, A to Z
 
+> 📍 **Reference page:** compact, exact facts about the architecture. For the plain-language, step-by-step version read [learn/02](learn/02-level2-how-it-works.md) and [learn/03](learn/03-level3-deep-dive.md). New here? Start at the [docs home](README.md).
+
 ## 1. The problem
 
 Allocate scarce inventory to a very large number of simultaneous claimants so that
@@ -215,9 +217,10 @@ quoted server-side and stored on the hold; a client-sent price is ignored.
 
 ## 12. Reconciliation
 
-Eight checks compare services: duplicate booking, ledger drift, payment without
-booking, confirmed without payment, expired hold still allocated, payment UNKNOWN
-too long, stuck saga, outbox backlog. Rules:
+Eleven checks compare services: duplicate booking, ledger drift, payment without
+booking, confirmed without payment, booking without allocation, allocation without
+booking, orphan payment, expired hold still allocated, payment UNKNOWN too long,
+stuck saga, outbox backlog. Rules:
 
 - **Grace windows**, and an issue must be seen in **two passes** before action — no
   snapshot across databases is atomic.

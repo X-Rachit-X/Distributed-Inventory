@@ -43,9 +43,17 @@ const { metrics } = require('@tessera/shared/src/observability/metrics');
  * `indeterminateOnTimeout` marks the steps where a timeout does NOT mean
  * failure — for payment, the money may have moved, so the saga must ask rather
  * than assume.
+ *
+ * `rerunOnDeadline` marks steps that are safe to simply run again, because the
+ * downstream call is idempotent (same key → same hold; confirming a confirmed
+ * hold returns it). A worker that crashes mid-step leaves a 60 s lease, which
+ * outlives these deadlines. Without this flag the next worker would find the
+ * deadline passed and take the timeout path: failing a booking whose hold
+ * exists, or refunding a customer whose seat was already confirmed. With it,
+ * the step is re-run until `maxAttempts`, and only then times out.
  */
 const STEP_POLICY = {
-     HOLD_PENDING: { timeoutMs: 10_000, maxAttempts: 3, onTimeout: 'HOLD_FAILED' },
+     HOLD_PENDING: { timeoutMs: 10_000, maxAttempts: 3, onTimeout: 'HOLD_FAILED', rerunOnDeadline: true },
      PAYMENT_PENDING: {
           timeoutMs: 45_000,
           maxAttempts: 1, // never re-charge automatically
@@ -53,7 +61,7 @@ const STEP_POLICY = {
           indeterminateOnTimeout: true,
      },
      PAYMENT_UNKNOWN: { timeoutMs: 300_000, maxAttempts: 10, onTimeout: 'MANUAL_REVIEW' },
-     CONFIRM_PENDING: { timeoutMs: 15_000, maxAttempts: 5, onTimeout: 'REFUND_PENDING' },
+     CONFIRM_PENDING: { timeoutMs: 15_000, maxAttempts: 5, onTimeout: 'REFUND_PENDING', rerunOnDeadline: true },
      RELEASE_PENDING: { timeoutMs: 15_000, maxAttempts: 5, onTimeout: 'MANUAL_REVIEW' },
      REFUND_PENDING: { timeoutMs: 30_000, maxAttempts: 5, onTimeout: 'MANUAL_REVIEW' },
 };
@@ -151,9 +159,18 @@ class SagaOrchestrator {
           const started = Date.now();
 
           // A step whose deadline has passed takes its timeout path instead of
-          // being retried forever.
+          // being retried forever — unless re-running it is safe and attempts
+          // remain, in which case it simply runs again with a fresh deadline.
           if (saga.step_deadline_at && new Date(saga.step_deadline_at) < new Date()) {
-               return this.#onTimeout(saga);
+               const policy = STEP_POLICY[saga.state];
+               if (!(policy?.rerunOnDeadline && saga.attempts <= policy.maxAttempts)) {
+                    return this.#onTimeout(saga);
+               }
+               this.logger.warn('saga step passed its deadline; re-running the idempotent step', {
+                    sagaId: saga.id,
+                    state: saga.state,
+                    attempt: saga.attempts,
+               });
           }
 
           switch (saga.state) {
@@ -172,7 +189,6 @@ class SagaOrchestrator {
                case 'CONFIRM_PENDING':
                     return this.#awaitConfirm(saga, started);
                case 'PAYMENT_FAILED':
-               case 'TIMED_OUT':
                     return this.#transition(saga, 'RELEASE_PENDING', 'OK', 'compensating');
                case 'RELEASE_PENDING':
                     return this.#releaseHold(saga, started);
@@ -303,9 +319,22 @@ class SagaOrchestrator {
           if (result.state === 'FAILED') {
                await this.pool.query(
                     `UPDATE reservations SET state = 'FAILED', failure_reason = $2 WHERE id = $1`,
-                    [saga.reservation_id, result.reason ?? 'payment_failed']
+                    [saga.reservation_id, result.reason ?? 'payment failed']
                );
                await this.#fail(saga, 'PAYMENT_FAILED', result.reason ?? 'payment failed');
+               return;
+          }
+
+          // Only a definite "money taken" moves forward. Anything else —
+          // notably CREATED, which a replayed charge returns when an earlier
+          // attempt crashed before reaching the provider — is not proof of
+          // payment. It is resolved by asking, exactly like a timeout.
+          if (result.state !== 'CAPTURED' && result.state !== 'AUTHORIZED') {
+               await this.#transition(saga, 'PAYMENT_UNKNOWN', 'RETRY', `payment is ${result.state}, not captured`, {
+                    deadlineMs: STEP_POLICY.PAYMENT_UNKNOWN.timeoutMs,
+                    runInMs: 250,
+                    context: { ...ctx, paymentId: result.paymentId },
+               });
                return;
           }
 
@@ -335,14 +364,31 @@ class SagaOrchestrator {
       */
      async #resolvePayment(saga) {
           const ctx = saga.context;
-          if (!ctx.paymentId) {
-               // No payment id means the charge request never landed, so no
-               // money moved. Safe to treat as failure.
-               await this.#fail(saga, 'PAYMENT_FAILED', 'charge never reached the provider');
-               return;
+          let paymentId = ctx.paymentId;
+
+          if (!paymentId) {
+               // We never saw the charge response (the payment service timed
+               // out, or this worker crashed mid-call), so we don't know the
+               // payment id. Look it up by the key we charged with. The payment
+               // row is committed BEFORE the provider is called, so "no row"
+               // means the charge never started; a row is resolved like any
+               // other. (The one gap: a request still in flight past our timeout
+               // could create its row later. Reconciliation's
+               // PAYMENT_WITHOUT_BOOKING check exists for exactly that.)
+               const payment = await this.payments.findByKey(`saga:${saga.id}:payment`);
+               if (!payment) {
+                    await this.#fail(saga, 'PAYMENT_FAILED', 'no payment was ever created for this booking');
+                    return;
+               }
+               paymentId = payment.id;
+               await this.pool.query(`UPDATE sagas SET context = context || $2::jsonb WHERE id = $1`, [
+                    saga.id,
+                    JSON.stringify({ paymentId }),
+               ]);
+               saga.context = { ...ctx, paymentId };
           }
 
-          const result = await this.payments.resolveUnknown(ctx.paymentId);
+          const result = await this.payments.resolveUnknown(paymentId);
 
           if (!result.resolved) {
                if (saga.attempts >= STEP_POLICY.PAYMENT_UNKNOWN.maxAttempts) {
@@ -364,8 +410,16 @@ class SagaOrchestrator {
                return;
           }
 
-          await this.#transition(saga, 'PAYMENT_AUTHORIZED', 'OK', 'resolved: provider confirms payment', {
-               runInMs: 0,
+          // Record the payment on the reservation in the same transaction as
+          // the step, or reconciliation would later report it as unpaid.
+          await this.pool.withTransaction(async (client) => {
+               await client.query(`UPDATE reservations SET payment_id = $2 WHERE id = $1`, [
+                    saga.reservation_id,
+                    paymentId,
+               ]);
+               await this.#transitionIn(client, saga, 'PAYMENT_AUTHORIZED', 'OK', 'resolved: provider confirms payment', {
+                    runInMs: 0,
+               });
           });
      }
 

@@ -3,8 +3,8 @@
 /**
  * Notification service.
  *
- * Consumes `booking.events` and `payment.events` and tells customers what
- * happened. Delivery is simulated — rows in a table plus a log line — because
+ * Consumes `booking.events` (booking.confirmed and booking.cancelled) and tells
+ * customers what happened. Delivery is simulated — rows in a table plus a log line — because
  * the interesting part is not SMTP, it is the consumer guarantees:
  *
  *   - AT-LEAST-ONCE in, EXACTLY ONE email out. The notification and the
@@ -18,7 +18,7 @@
  *     can list dead letters and replay them after fixing the cause.
  */
 
-require('../../inventory-engine/src/config/env');
+require('@tessera/shared/src/config/env');
 require('@tessera/shared/src/observability/tracing');
 
 const { createPool } = require('@tessera/shared/src/db/pool');
@@ -28,13 +28,13 @@ const { createIdempotentHandler, replayDeadLetters } = require('@tessera/shared/
 const { startConsumer } = require('@tessera/shared/src/consumer/runner');
 const { UnauthorizedError } = require('@tessera/shared/src/errors');
 
-const num = (v, d) => (v === undefined || v === '' ? d : Number(v));
+const { str, num, secret } = require('@tessera/shared/src/config');
 const config = {
-     PORT: num(process.env.NOTIFICATION_PORT, 4005),
+     PORT: num('NOTIFICATION_PORT', 4005),
      DATABASE_URL:
-          process.env.NOTIFICATION_DATABASE_URL || 'postgresql://tessera:tessera@localhost:5432/notification',
-     KAFKA_BROKERS: process.env.KAFKA_BROKERS || '',
-     INTERNAL_TOKEN: process.env.INTERNAL_TOKEN || 'dev-internal-token',
+          str('NOTIFICATION_DATABASE_URL', 'postgresql://tessera:tessera@localhost:5432/notification'),
+     KAFKA_BROKERS: str('KAFKA_BROKERS', ''),
+     INTERNAL_TOKEN: secret('INTERNAL_TOKEN'),
 };
 
 const CONSUMER_GROUP = 'notification-v1';

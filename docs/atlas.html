@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>*,*::before,*::after{box-sizing:border-box}body{margin:0}img{max-width:100%}</style>
+<title>Tessera Atlas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: one reading column; each section = claim + figure + "where in code". Railway signal-board feel: condensed display, cool grey ground, signal blue for the authority. */
+:root {
+  --bg: #eef2f3;
+  --surface: #ffffff;
+  --panel: #f7f9fa;
+  --ink: #17262b;
+  --muted: #56676d;
+  --line: #93a3a9;
+  --rule: #d3dcdf;
+  --accent: #1c52a3;
+  --accent-soft: #e1eaf7;
+  --ok: #1d7a4b;
+  --ok-soft: #e1f2e8;
+  --warn: #a96300;
+  --warn-soft: #fbefd9;
+  --bad: #b3261e;
+  --bad-soft: #fbe3e1;
+  --note: #f4f6e9;
+  --display: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+  --sans: "Public Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1619; --surface: #162024; --panel: #1b272c; --ink: #e2eaec; --muted: #98a8ad;
+    --line: #5b6c72; --rule: #2a383d; --accent: #82aaf0; --accent-soft: #1d2d47;
+    --ok: #5cc48d; --ok-soft: #173326; --warn: #e8aa45; --warn-soft: #3a2c12;
+    --bad: #f08176; --bad-soft: #3d1c1a; --note: #222a1d; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1619; --surface: #162024; --panel: #1b272c; --ink: #e2eaec; --muted: #98a8ad;
+  --line: #5b6c72; --rule: #2a383d; --accent: #82aaf0; --accent-soft: #1d2d47;
+  --ok: #5cc48d; --ok-soft: #173326; --warn: #e8aa45; --warn-soft: #3a2c12;
+  --bad: #f08176; --bad-soft: #3d1c1a; --note: #222a1d; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font: 400 16px/1.6 var(--sans); }
+.wrap { max-width: 1080px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 72px; }
+header { display: grid; gap: 14px; padding-block-end: 28px; border-bottom: 2px solid var(--ink); }
+.eyebrow { font: 600 13px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1 { font: 700 clamp(40px, 7vw, 68px)/0.95 var(--display); letter-spacing: .01em; margin: 0; text-wrap: balance; }
+.lede { max-width: 66ch; color: var(--muted); margin: 0; font-size: 17px; }
+.lede strong { color: var(--ink); }
+nav.toc { display: flex; flex-wrap: wrap; gap: 8px; padding-block: 18px 0; }
+nav.toc a { font: 500 13px/1 var(--mono); color: var(--ink); text-decoration: none; border: 1px solid var(--rule); background: var(--surface); padding: 8px 10px; border-radius: 3px; }
+nav.toc a:hover, nav.toc a:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+nav.toc a span { color: var(--muted); margin-right: 6px; }
+section { display: grid; gap: 14px; padding-block: 44px 8px; border-bottom: 1px solid var(--rule); }
+section:last-of-type { border-bottom: 0; }
+.num { font: 600 13px/1 var(--mono); color: var(--muted); letter-spacing: .06em; }
+h2 { font: 600 clamp(28px, 4vw, 38px)/1.05 var(--display); margin: 0; text-wrap: balance; }
+.claim { max-width: 70ch; margin: 0; }
+figure { margin: 0; background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 18px 14px 14px; display: grid; gap: 12px; min-width: 0; }
+.scroll { overflow-x: auto; min-width: 0; }
+.scroll svg { min-width: 780px; }
+figcaption { font-size: 14px; color: var(--muted); max-width: 80ch; }
+.code { font: 400 13px/1.5 var(--mono); color: var(--muted); margin: 0; }
+.code b { color: var(--ink); font-weight: 500; }
+code { font: 400 0.9em var(--mono); background: var(--panel); padding: 1px 4px; border-radius: 2px; }
+
+/* SVG vocabulary */
+svg.d { display: block; width: 100%; height: auto; color: var(--ink); }
+.d text { fill: var(--ink); font-family: var(--sans); font-size: 12.5px; }
+.d .t { font-weight: 600; }
+.d .s { fill: var(--muted); font-size: 11px; }
+.d .m { font-family: var(--mono); font-size: 11.5px; }
+.d .l { fill: var(--muted); font-size: 11px; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
+.d .h { font-family: var(--display); font-size: 17px; font-weight: 600; letter-spacing: .02em; }
+.d .b { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; }
+.d .k { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
+.d .ok { fill: var(--ok-soft); stroke: var(--ok); stroke-width: 1.6; }
+.d .wa { fill: var(--warn-soft); stroke: var(--warn); stroke-width: 1.6; }
+.d .bd { fill: var(--bad-soft); stroke: var(--bad); stroke-width: 1.6; }
+.d .nt { fill: var(--note); stroke: var(--line); stroke-width: 1; }
+.d .grp { fill: none; stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 5 4; }
+.d .life { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.d .e { stroke: var(--ink); stroke-width: 1.3; fill: none; }
+.d .e.da { stroke-dasharray: 5 4; }
+.d .e.ac { stroke: var(--accent); stroke-width: 1.8; }
+.d .e.rd { stroke: var(--bad); }
+.d .mk { fill: var(--ink); }
+.d .mka { fill: var(--accent); }
+.d .mkr { fill: var(--bad); }
+.d .ta { fill: var(--accent); }
+.d .tok { fill: var(--ok); }
+.d .tbd { fill: var(--bad); }
+.d .twa { fill: var(--warn); }
+.d .dot { fill: var(--bad); }
+
+.rules { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); padding: 0; margin: 0; list-style: none; }
+.rules li { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 14px 16px; min-width: 0; }
+.rules b { display: block; font: 600 20px/1.1 var(--display); margin-bottom: 4px; }
+.rules span { color: var(--muted); font-size: 14px; }
+ol.path { margin: 0; padding: 0; list-style: none; display: grid; gap: 0; counter-reset: step; }
+ol.path li { counter-increment: step; display: grid; grid-template-columns: 44px 1fr; gap: 12px; padding-block: 12px; border-top: 1px solid var(--rule); min-width: 0; }
+ol.path li::before { content: counter(step, decimal-leading-zero); font: 600 22px/1 var(--display); color: var(--accent); padding-top: 2px; }
+ol.path p { margin: 0; min-width: 0; }
+ol.path .f { font: 500 14px/1.4 var(--mono); color: var(--ink); word-break: break-word; }
+ol.path .w { color: var(--muted); font-size: 14.5px; }
+.ref { color: var(--muted); font-size: 15px; max-width: 75ch; }
+@media (max-width: 560px) { .wrap { padding-inline: 16px; } figure { padding: 14px 10px 10px; } }
+@media (prefers-reduced-motion: no-preference) { nav.toc a { transition: border-color .15s, color .15s; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">Tessera · distributed reservation engine</div>
+  <h1>How Tessera fits together</h1>
+  <p class="lede">Eight diagrams, each showing one mechanism. The single idea underneath all of them: <strong>PostgreSQL refuses to store two live bookings of the same seat with overlapping journeys.</strong> Everything else makes the system faster, fairer or more resilient, and none of it is needed to prevent an oversell.</p>
+  <nav class="toc" aria-label="Diagrams">
+    <a href="#map"><span>1</span>System map</a>
+    <a href="#floor"><span>2</span>Correctness floor</a>
+    <a href="#contention"><span>3</span>1,000 buyers, 1 seat</a>
+    <a href="#booking"><span>4</span>One booking</a>
+    <a href="#saga"><span>5</span>Saga states</a>
+    <a href="#outbox"><span>6</span>Outbox to consumer</a>
+    <a href="#payment"><span>7</span>UNKNOWN payments</a>
+    <a href="#reads"><span>8</span>Reads vs writes</a>
+    <a href="#order"><span>→</span>Reading order</a>
+  </nav>
+</header>
+
+<!-- 1 ─────────────────────────────────────────────── -->
+<section id="map">
+  <div class="num">01 · SYSTEM MAP</div>
+  <h2>Eight services, one authority</h2>
+  <p class="claim">Every request enters through the gateway. Only the inventory engine may write allocations. Services own separate databases and announce changes through Kafka using an outbox; reconciliation is the one component that reads every database.</p>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 980 572" role="img" aria-label="System map: browser to gateway; gateway proxies to discovery, pricing, reservation, reconciliation and notification; reservation calls inventory engine and payment; inventory, reservation and payment publish through Kafka; Kafka feeds discovery and notification; every service owns a PostgreSQL database.">
+      <defs>
+        <marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+        <marker id="m1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mka"/></marker>
+      </defs>
+      <!-- browser + gateway -->
+      <rect class="b" x="390" y="14" width="200" height="40" rx="3"/>
+      <text x="490" y="39" text-anchor="middle" class="t">Browser · React console</text>
+      <line class="e" x1="490" y1="54" x2="490" y2="92" marker-end="url(#m1)"/>
+      <text class="l" x="498" y="78">HTTPS /api/*</text>
+      <rect class="b" x="290" y="94" width="400" height="58" rx="3"/>
+      <text x="490" y="118" text-anchor="middle" class="t">gateway :4000</text>
+      <text x="490" y="138" text-anchor="middle" class="s">rate limit · JWT · roles · waiting room · load shedding</text>
+      <rect class="b" x="742" y="98" width="230" height="50" rx="3"/>
+      <text x="857" y="119" text-anchor="middle" class="t">Redis</text>
+      <text x="857" y="137" text-anchor="middle" class="s">rate limits · waiting room · cache</text>
+      <line class="e" x1="690" y1="123" x2="740" y2="123" marker-end="url(#m1)"/>
+      <text class="l" x="716" y="115" text-anchor="middle">Lua</text>
+      <!-- proxies -->
+      <line class="e" x1="330" y1="152" x2="110" y2="212" marker-end="url(#m1)"/>
+      <line class="e" x1="400" y1="152" x2="290" y2="212" marker-end="url(#m1)"/>
+      <line class="e" x1="470" y1="152" x2="470" y2="212" marker-end="url(#m1)"/>
+      <line class="e" x1="600" y1="152" x2="650" y2="212" marker-end="url(#m1)"/>
+      <line class="e" x1="660" y1="152" x2="830" y2="212" marker-end="url(#m1)"/>
+      <text class="l" x="478" y="186">proxy + verified customer id</text>
+      <!-- service row -->
+      <rect class="b" x="20" y="214" width="160" height="54" rx="3"/>
+      <text x="100" y="237" text-anchor="middle" class="t">discovery :4006</text>
+      <text x="100" y="255" text-anchor="middle" class="s">search read model</text>
+      <rect class="b" x="205" y="214" width="160" height="54" rx="3"/>
+      <text x="285" y="237" text-anchor="middle" class="t">pricing :4007</text>
+      <text x="285" y="255" text-anchor="middle" class="s">fares from live availability</text>
+      <rect class="b" x="390" y="214" width="160" height="54" rx="3"/>
+      <text x="470" y="237" text-anchor="middle" class="t">reservation :4002</text>
+      <text x="470" y="255" text-anchor="middle" class="s">booking API + saga</text>
+      <rect class="b" x="575" y="214" width="160" height="54" rx="3"/>
+      <text x="655" y="237" text-anchor="middle" class="t">reconciliation :4004</text>
+      <text x="655" y="255" text-anchor="middle" class="s">the auditor</text>
+      <rect class="b" x="760" y="214" width="160" height="54" rx="3"/>
+      <text x="840" y="237" text-anchor="middle" class="t">notification :4005</text>
+      <text x="840" y="255" text-anchor="middle" class="s">one email per event</text>
+      <!-- layer 3 -->
+      <rect class="b" x="20" y="330" width="170" height="56" rx="3"/>
+      <text x="105" y="354" text-anchor="middle" class="t">Elasticsearch</text>
+      <text x="105" y="372" text-anchor="middle" class="s">search index (PG fallback)</text>
+      <rect class="k" x="290" y="330" width="230" height="56" rx="3"/>
+      <text x="405" y="354" text-anchor="middle" class="t ta">inventory-engine :4001</text>
+      <text x="405" y="372" text-anchor="middle" class="s">the authority · exclusion constraint</text>
+      <rect class="b" x="570" y="330" width="150" height="56" rx="3"/>
+      <text x="645" y="354" text-anchor="middle" class="t">payment :4003</text>
+      <text x="645" y="372" text-anchor="middle" class="s">UNKNOWN-aware</text>
+      <line class="e" x1="100" y1="268" x2="100" y2="328" marker-end="url(#m1)"/>
+      <text class="l" x="92" y="302" text-anchor="end">query</text>
+      <line class="e" x1="180" y1="262" x2="288" y2="366" marker-end="url(#m1)"/>
+      <text class="l" x="224" y="314" text-anchor="end">re-reads availability</text>
+      <line class="e ac" x1="430" y1="268" x2="430" y2="328" marker-end="url(#m1a)"/>
+      <text class="l" x="422" y="302" text-anchor="end">reserve · confirm · release</text>
+      <line class="e" x1="550" y1="250" x2="622" y2="328" marker-end="url(#m1)"/>
+      <text class="l" x="600" y="296">charge · resolve</text>
+      <!-- kafka -->
+      <rect class="b" x="290" y="446" width="430" height="50" rx="3"/>
+      <text x="505" y="467" text-anchor="middle" class="t">Kafka (KRaft)</text>
+      <text x="505" y="485" text-anchor="middle" class="s">inventory.events · booking.events · payment.events — keyed by aggregate</text>
+      <line class="e" x1="405" y1="386" x2="405" y2="444" marker-end="url(#m1)"/>
+      <text class="l" x="397" y="420" text-anchor="end">outbox relay</text>
+      <line class="e" x1="545" y1="268" x2="545" y2="444" marker-end="url(#m1)"/>
+      <text class="l" x="553" y="420">outbox relay</text>
+      <line class="e" x1="645" y1="386" x2="645" y2="444" marker-end="url(#m1)"/>
+      <line class="e" x1="290" y1="456" x2="160" y2="270" marker-end="url(#m1)"/>
+      <text class="l" x="244" y="406" text-anchor="end">mark train dirty</text>
+      <line class="e" x1="720" y1="462" x2="840" y2="270" marker-end="url(#m1)"/>
+      <text class="l" x="790" y="380">booking.events</text>
+      <!-- reconciliation reads -->
+      <polyline class="e da" points="735,241 745,241 745,518" marker-end="url(#m1)"/>
+      <text class="l" x="753" y="506">reads every DB (read-only)</text>
+      <!-- postgres -->
+      <rect class="k" x="20" y="520" width="940" height="40" rx="3"/>
+      <text x="490" y="545" text-anchor="middle" class="t">PostgreSQL 16 — one database per service; each business write and its outbox row commit in one transaction</text>
+    </svg>
+    </div>
+    <figcaption>Blue marks the authority. Solid arrows are synchronous HTTP; the dashed arrow is reconciliation's read-only access. Kafka carries "something changed" signals, never commands: no booking step depends on Kafka being up.</figcaption>
+  </figure>
+  <p class="code">Where: <b>services/gateway/src/index.js</b> (routes) · <b>deploy/compose/docker-compose.yml</b> (infrastructure) · <b>deploy/compose/init/postgres/01-databases.sql</b> (one DB per service)</p>
+</section>
+
+<!-- 2 ─────────────────────────────────────────────── -->
+<section id="floor">
+  <div class="num">02 · THE CORRECTNESS FLOOR</div>
+  <h2>Only the bottom layer can stop an oversell</h2>
+  <p class="claim">Each layer has a different job. If an upper layer breaks, the system gets slower, less fair, or needs a repair, but no seat is sold twice, because the database itself refuses the row.</p>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 900 286" role="img" aria-label="Four stacked layers. Top: admission and caches; failure makes it slower or less fair. Second: reliability plumbing; failure causes duplicates or stuck flows that are caught and repaired. Third: throughput mechanisms; failure makes it slower but still correct. Bottom: the exclusion constraint; it refuses the second overlapping row.">
+      <rect class="b" x="20" y="16" width="860" height="52" rx="3"/>
+      <text x="38" y="38" class="t">Admission &amp; caches</text>
+      <text x="38" y="56" class="s">token bucket · waiting room · load shedding · L1/L2 cache · Elasticsearch</text>
+      <text x="862" y="47" text-anchor="end" class="s">if it fails: slower or less fair</text>
+      <rect class="b" x="20" y="80" width="860" height="52" rx="3"/>
+      <text x="38" y="102" class="t">Reliability plumbing</text>
+      <text x="38" y="120" class="s">idempotency keys · outbox · consumer dedupe · durable saga · UNKNOWN payments · reconciliation</text>
+      <text x="862" y="111" text-anchor="end" class="s">if it fails: duplicates or stuck flows, flagged</text>
+      <rect class="b" x="20" y="144" width="860" height="52" rx="3"/>
+      <text x="38" y="166" class="t">Throughput</text>
+      <text x="38" y="184" class="s">sorted row-lock queue · SKIP LOCKED workers · compare-and-swap · bucketed pools</text>
+      <text x="862" y="175" text-anchor="end" class="s">if it fails: slower, still correct</text>
+      <rect class="k" x="20" y="214" width="860" height="58" rx="3"/>
+      <text x="38" y="238" class="t ta">Correctness floor</text>
+      <text x="38" y="258" class="m">EXCLUDE USING gist (resource_id WITH =, span WITH &amp;&amp;) WHERE state IN ('HELD','CONFIRMED','BLOCKED')</text>
+      <text x="862" y="238" text-anchor="end" class="s">second overlapping row → SQLSTATE 23P01 → HTTP 409</text>
+    </svg>
+    </div>
+    <figcaption>Spans are half-open ranges: <code>[0,3)</code> and <code>[3,7)</code> don't overlap, so one seat can be sold Delhi→Kanpur and Kanpur→Howrah. Expired, released and cancelled rows stay in the table as history and drop out of the constraint.</figcaption>
+  </figure>
+  <p class="code">Where: <b>services/inventory-engine/sql/migrations/010_inventory_core.sql</b> (constraint) · <b>engine/reserve.js</b> (catches 23P01 → 409)</p>
+</section>
+
+<!-- 3 ─────────────────────────────────────────────── -->
+<section id="contention">
+  <div class="num">03 · 1,000 BUYERS, 1 SEAT</div>
+  <h2>Why a row lock sits in front of the constraint</h2>
+  <p class="claim">Both designs below are correct: neither ever sold the seat twice. The difference is how waiting is organised. A GiST exclusion constraint inserts first and then waits on any conflicting transaction still in flight, so concurrent inserters wait on each other in cycles. Locking the seat's row first turns that tangle into a single queue.</p>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 960 336" role="img" aria-label="Comparison. Left, constraint alone: four transactions wait on each other in a cycle around the GiST conflict scan; 609 of 1,000 deadlocked, p99 30 seconds, 9.6 requests per second. Right, row-lock queue then constraint: transactions queue in order on the seat row lock, one at a time insert, one commits and the rest get 409; zero deadlocks, p99 186 milliseconds, 575 requests per second.">
+      <defs>
+        <marker id="m3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+        <marker id="m3r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mkr"/></marker>
+        <marker id="m3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mka"/></marker>
+      </defs>
+      <text x="20" y="30" class="h">Constraint alone · lab strategy F</text>
+      <circle class="b" cx="120" cy="95" r="22"/><text x="120" y="99" text-anchor="middle" class="m">T1</text>
+      <circle class="b" cx="360" cy="95" r="22"/><text x="360" y="99" text-anchor="middle" class="m">T2</text>
+      <circle class="b" cx="360" cy="245" r="22"/><text x="360" y="249" text-anchor="middle" class="m">T3</text>
+      <circle class="b" cx="120" cy="245" r="22"/><text x="120" y="249" text-anchor="middle" class="m">T4</text>
+      <line class="e rd" x1="142" y1="95" x2="336" y2="95" marker-end="url(#m3r)"/>
+      <line class="e rd" x1="360" y1="117" x2="360" y2="221" marker-end="url(#m3r)"/>
+      <line class="e rd" x1="338" y1="245" x2="144" y2="245" marker-end="url(#m3r)"/>
+      <line class="e rd" x1="120" y1="223" x2="120" y2="119" marker-end="url(#m3r)"/>
+      <text class="l" x="240" y="87" text-anchor="middle">waits on</text>
+      <text class="l" x="240" y="263" text-anchor="middle">waits on</text>
+      <rect class="b" x="170" y="146" width="140" height="50" rx="3"/>
+      <text x="240" y="167" text-anchor="middle" class="t">INSERT first</text>
+      <text x="240" y="185" text-anchor="middle" class="s">then scan for conflicts</text>
+      <text x="20" y="306" class="t tbd">609 of 1,000 deadlocked (40P01)</text>
+      <text x="20" y="326" class="s">p99 30,008 ms · 9.6 req/s · 0 oversold</text>
+
+      <line x1="480" y1="16" x2="480" y2="326" class="life"/>
+
+      <text x="510" y="30" class="h">Row-lock queue + constraint · production (F2)</text>
+      <rect class="b" x="520" y="58" width="44" height="30" rx="3"/><text x="542" y="78" text-anchor="middle" class="m">T5</text>
+      <rect class="b" x="572" y="58" width="44" height="30" rx="3"/><text x="594" y="78" text-anchor="middle" class="m">T4</text>
+      <rect class="b" x="624" y="58" width="44" height="30" rx="3"/><text x="646" y="78" text-anchor="middle" class="m">T3</text>
+      <rect class="b" x="676" y="58" width="44" height="30" rx="3"/><text x="698" y="78" text-anchor="middle" class="m">T2</text>
+      <rect class="k" x="728" y="58" width="44" height="30" rx="3"/><text x="750" y="78" text-anchor="middle" class="m ta">T1</text>
+      <text class="l" x="520" y="108">FIFO, one waiter at a time</text>
+      <line class="e" x1="750" y1="88" x2="750" y2="126" marker-end="url(#m3)"/>
+      <rect class="b" x="660" y="128" width="180" height="44" rx="3"/>
+      <text x="750" y="148" text-anchor="middle" class="t">lock seat row</text>
+      <text x="750" y="164" text-anchor="middle" class="m s">SELECT … FOR UPDATE</text>
+      <line class="e" x1="750" y1="172" x2="750" y2="196" marker-end="url(#m3)"/>
+      <rect class="k" x="660" y="198" width="180" height="44" rx="3"/>
+      <text x="750" y="218" text-anchor="middle" class="t ta">INSERT → constraint</text>
+      <text x="750" y="234" text-anchor="middle" class="s">no competing inserter</text>
+      <line class="e ac" x1="680" y1="242" x2="600" y2="270" marker-end="url(#m3a)"/>
+      <line class="e" x1="820" y1="242" x2="880" y2="270" marker-end="url(#m3)"/>
+      <text x="560" y="284" class="t tok">1 commits (HELD)</text>
+      <text x="948" y="290" text-anchor="end" class="t">999 × 23P01 → 409</text>
+      <text x="510" y="306" class="t tok">0 deadlocks</text>
+      <text x="510" y="326" class="s">p99 186 ms · 575 req/s (86×) · 0 oversold</text>
+    </svg>
+    </div>
+    <figcaption>Measured by <code>npm run lab</code> on one laptop; correctness judged by counting stored rows. For comparison, naive read-check-write sold the same seat to 64 customers, and a Redis lock reached 11,364 req/s but leaked once, which the constraint caught.</figcaption>
+  </figure>
+  <p class="code">Where: <b>engine/reserve.js</b> steps 3–4 (sort, lock) · <b>lab/src/strategies/index.js</b> (F vs F2) · <b>docs/benchmarks/RESULTS.md</b></p>
+</section>
+
+<!-- 4 ─────────────────────────────────────────────── -->
+<section id="booking">
+  <div class="num">04 · ONE BOOKING</div>
+  <h2>The request returns early; a saga finishes the job</h2>
+  <p class="claim">The API stores the intent in one fast transaction and replies 202. A saga worker then drives hold → charge → confirm, one step per claim, with an idempotency key derived from the saga id on every call. A crash between steps loses nothing, because progress lives in a row.</p>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 980 660" role="img" aria-label="Sequence: browser posts a reservation with an idempotency key; gateway proxies; reservation quotes prices before any transaction, writes reservation, items and saga row in one transaction, returns 202. Saga worker claims the saga, reserves inventory, charges payment, confirms inventory, writes the booking and an outbox event; the relay publishes to Kafka and notification sends one email; the browser polls until booked.">
+      <defs>
+        <marker id="m4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+        <marker id="m4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mka"/></marker>
+      </defs>
+      <g>
+        <rect class="b" x="10" y="12" width="100" height="36" rx="3"/><text x="60" y="35" text-anchor="middle" class="t">Browser</text>
+        <rect class="b" x="130" y="12" width="100" height="36" rx="3"/><text x="180" y="35" text-anchor="middle" class="t">Gateway</text>
+        <rect class="b" x="245" y="12" width="110" height="36" rx="3"/><text x="300" y="35" text-anchor="middle" class="t">Reservation</text>
+        <rect class="b" x="375" y="12" width="110" height="36" rx="3"/><text x="430" y="35" text-anchor="middle" class="t">Saga worker</text>
+        <rect class="b" x="500" y="12" width="100" height="36" rx="3"/><text x="550" y="35" text-anchor="middle" class="t">Pricing</text>
+        <rect class="k" x="625" y="12" width="110" height="36" rx="3"/><text x="680" y="35" text-anchor="middle" class="t ta">Inventory</text>
+        <rect class="b" x="750" y="12" width="100" height="36" rx="3"/><text x="800" y="35" text-anchor="middle" class="t">Payment</text>
+        <rect class="b" x="865" y="12" width="110" height="36" rx="3"/><text x="920" y="30" text-anchor="middle" class="t">Kafka →</text><text x="920" y="43" text-anchor="middle" class="s">notification</text>
+      </g>
+      <line class="life" x1="60" y1="48" x2="60" y2="650"/>
+      <line class="life" x1="180" y1="48" x2="180" y2="650"/>
+      <line class="life" x1="300" y1="48" x2="300" y2="650"/>
+      <line class="life" x1="430" y1="48" x2="430" y2="650"/>
+      <line class="life" x1="550" y1="48" x2="550" y2="650"/>
+      <line class="life" x1="680" y1="48" x2="680" y2="650"/>
+      <line class="life" x1="800" y1="48" x2="800" y2="650"/>
+      <line class="life" x1="920" y1="48" x2="920" y2="650"/>
+
+      <line class="e" x1="60" y1="84" x2="178" y2="84" marker-end="url(#m4)"/>
+      <text class="l" x="66" y="77">1 POST + Idempotency-Key</text>
+      <line class="e" x1="180" y1="118" x2="298" y2="118" marker-end="url(#m4)"/>
+      <text class="l" x="186" y="111">2 proxy + customer id</text>
+      <line class="e" x1="300" y1="152" x2="548" y2="152" marker-end="url(#m4)"/>
+      <text class="l" x="306" y="145">3 quote fares (before any transaction)</text>
+      <line class="e da" x1="550" y1="176" x2="302" y2="176" marker-end="url(#m4)"/>
+      <text class="l" x="544" y="170" text-anchor="end">fares</text>
+      <rect class="nt" x="232" y="188" width="196" height="40" rx="3"/>
+      <text x="240" y="205" class="s">4 one tx: reservation · items ·</text>
+      <text x="240" y="220" class="s">saga row · idempotency record</text>
+      <line class="e da" x1="300" y1="250" x2="62" y2="250" marker-end="url(#m4)"/>
+      <text class="l" x="294" y="243" text-anchor="end">5 202 Accepted + pollUrl</text>
+
+      <rect class="nt" x="350" y="268" width="170" height="40" rx="3"/>
+      <text x="358" y="285" class="s">6 claim: SKIP LOCKED</text>
+      <text x="358" y="300" class="s">+ 60 s lease, one step</text>
+      <line class="e ac" x1="430" y1="330" x2="678" y2="330" marker-end="url(#m4a)"/>
+      <text class="l" x="436" y="323">7 reserve · key saga:&lt;id&gt;:hold</text>
+      <rect class="k" x="690" y="342" width="168" height="62" rx="3"/>
+      <text x="698" y="359" class="s">lock seat rows (sorted)</text>
+      <text x="698" y="374" class="s">reap expired holds</text>
+      <text x="698" y="389" class="s">INSERT → constraint decides</text>
+      <text x="698" y="400" class="s"></text>
+      <line class="e da" x1="680" y1="420" x2="432" y2="420" marker-end="url(#m4)"/>
+      <text class="l" x="674" y="414" text-anchor="end">hold + total (ledger + outbox in same tx)</text>
+      <line class="e" x1="430" y1="456" x2="798" y2="456" marker-end="url(#m4)"/>
+      <text class="l" x="436" y="449">8 charge · key saga:&lt;id&gt;:payment</text>
+      <line class="e da" x1="800" y1="484" x2="432" y2="484" marker-end="url(#m4)"/>
+      <text class="l" x="794" y="478" text-anchor="end">CAPTURED — or UNKNOWN → ask provider, never re-charge</text>
+      <line class="e ac" x1="430" y1="520" x2="678" y2="520" marker-end="url(#m4a)"/>
+      <text class="l" x="436" y="513">9 confirm · UPDATE … AND expires_at &gt; now()</text>
+      <rect class="nt" x="270" y="536" width="210" height="40" rx="3"/>
+      <text x="278" y="553" class="s">10 one tx: booking TSR-… +</text>
+      <text x="278" y="568" class="s">outbox booking.confirmed (v2)</text>
+      <line class="e da" x1="430" y1="596" x2="918" y2="596" marker-end="url(#m4)"/>
+      <text class="l" x="490" y="589">11 relay publishes → consumer dedupes → exactly one email</text>
+      <line class="e" x1="60" y1="634" x2="298" y2="634" marker-end="url(#m4)"/>
+      <text class="l" x="66" y="627">12 poll GET /reservations/:id → "Booked"</text>
+    </svg>
+    </div>
+    <figcaption>Blue arrows touch the authority. Steps 3 and 7–9 are network calls, and each happens outside any open database transaction. If payment declines, the saga releases the hold; if the hold expired after payment, it refunds (see diagram 5).</figcaption>
+  </figure>
+  <p class="code">Where: <b>services/reservation/src/index.js</b> (1–5) · <b>saga/orchestrator.js</b> (6–10) · <b>shared/src/outbox</b> + <b>notification/src/index.js</b> (11)</p>
+</section>
+
+<!-- 5 ─────────────────────────────────────────────── -->
+<section id="saga">
+  <div class="num">05 · SAGA STATES</div>
+  <h2>Every failure has a defined way out</h2>
+  <p class="claim">The forward path runs down the left. Each failure branches right into a compensation that undoes what already happened. A database trigger rejects any arrow not drawn here, and every money-ambiguous case ends with a human, not a guess.</p>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 990 552" role="img" aria-label="Saga state machine. Forward: CREATED, HOLD_PENDING, HOLD_CREATED, PAYMENT_PENDING, PAYMENT_AUTHORIZED, CONFIRM_PENDING, CONFIRMED. Hold rejected leads to HOLD_FAILED then COMPENSATED. Payment declined leads to PAYMENT_FAILED, RELEASE_PENDING, RELEASED, COMPENSATED. Payment timeout leads to PAYMENT_UNKNOWN, which resolves to PAYMENT_AUTHORIZED, PAYMENT_FAILED, or after ten attempts MANUAL_REVIEW. Hold expired after payment leads to REFUND_PENDING then COMPENSATED.">
+      <defs>
+        <marker id="m5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+      </defs>
+      <!-- column A -->
+      <rect class="b" x="20" y="20" width="200" height="36" rx="3"/><text x="120" y="43" text-anchor="middle" class="m">CREATED</text>
+      <rect class="b" x="20" y="90" width="200" height="36" rx="3"/><text x="120" y="113" text-anchor="middle" class="m">HOLD_PENDING</text>
+      <rect class="b" x="20" y="160" width="200" height="36" rx="3"/><text x="120" y="183" text-anchor="middle" class="m">HOLD_CREATED</text>
+      <rect class="b" x="20" y="230" width="200" height="36" rx="3"/><text x="120" y="253" text-anchor="middle" class="m">PAYMENT_PENDING</text>
+      <rect class="b" x="20" y="300" width="200" height="36" rx="3"/><text x="120" y="323" text-anchor="middle" class="m">PAYMENT_AUTHORIZED</text>
+      <rect class="b" x="20" y="370" width="200" height="36" rx="3"/><text x="120" y="393" text-anchor="middle" class="m">CONFIRM_PENDING</text>
+      <rect class="ok" x="20" y="440" width="200" height="36" rx="3"/><text x="120" y="463" text-anchor="middle" class="m tok">CONFIRMED</text>
+      <line class="e" x1="120" y1="56" x2="120" y2="88" marker-end="url(#m5)"/>
+      <line class="e" x1="120" y1="126" x2="120" y2="158" marker-end="url(#m5)"/>
+      <text class="l" x="128" y="146">seat held</text>
+      <line class="e" x1="120" y1="196" x2="120" y2="228" marker-end="url(#m5)"/>
+      <line class="e" x1="120" y1="266" x2="120" y2="298" marker-end="url(#m5)"/>
+      <text class="l" x="128" y="286">captured</text>
+      <line class="e" x1="120" y1="336" x2="120" y2="368" marker-end="url(#m5)"/>
+      <line class="e" x1="120" y1="406" x2="120" y2="438" marker-end="url(#m5)"/>
+      <text class="l" x="128" y="426">confirmed</text>
+      <!-- column B -->
+      <rect class="b" x="270" y="90" width="200" height="36" rx="3"/><text x="370" y="113" text-anchor="middle" class="m">HOLD_FAILED</text>
+      <rect class="b" x="270" y="230" width="200" height="36" rx="3"/><text x="370" y="253" text-anchor="middle" class="m">PAYMENT_FAILED</text>
+      <rect class="wa" x="270" y="300" width="200" height="36" rx="3"/><text x="370" y="323" text-anchor="middle" class="m twa">PAYMENT_UNKNOWN</text>
+      <rect class="b" x="270" y="370" width="200" height="36" rx="3"/><text x="370" y="393" text-anchor="middle" class="m">REFUND_PENDING</text>
+      <!-- column C/D -->
+      <rect class="b" x="520" y="230" width="200" height="36" rx="3"/><text x="620" y="253" text-anchor="middle" class="m">RELEASE_PENDING</text>
+      <rect class="bd" x="520" y="300" width="200" height="36" rx="3"/><text x="620" y="323" text-anchor="middle" class="m tbd">MANUAL_REVIEW</text>
+      <rect class="b" x="760" y="230" width="180" height="36" rx="3"/><text x="850" y="253" text-anchor="middle" class="m">RELEASED</text>
+      <rect class="b" x="270" y="500" width="700" height="36" rx="3"/><text x="620" y="523" text-anchor="middle" class="m">COMPENSATED (terminal, nothing left to undo)</text>
+      <!-- failure edges -->
+      <line class="e" x1="220" y1="108" x2="268" y2="108" marker-end="url(#m5)"/>
+      <text class="l" x="244" y="100" text-anchor="middle">409</text>
+      <polyline class="e" points="470,108 955,108 955,498" marker-end="url(#m5)"/>
+      <text class="l" x="712" y="100" text-anchor="middle">nothing to undo</text>
+      <line class="e" x1="220" y1="248" x2="268" y2="248" marker-end="url(#m5)"/>
+      <text class="l" x="244" y="240" text-anchor="middle">declined</text>
+      <line class="e" x1="470" y1="248" x2="518" y2="248" marker-end="url(#m5)"/>
+      <line class="e" x1="720" y1="248" x2="758" y2="248" marker-end="url(#m5)"/>
+      <line class="e" x1="850" y1="266" x2="850" y2="498" marker-end="url(#m5)"/>
+      <text class="l" x="842" y="400" text-anchor="end">seat back on sale</text>
+      <line class="e" x1="220" y1="258" x2="268" y2="306" marker-end="url(#m5)"/>
+      <text class="l" x="228" y="292">timeout</text>
+      <line class="e" x1="270" y1="330" x2="222" y2="330" marker-end="url(#m5)"/>
+      <text class="l" x="246" y="350" text-anchor="middle">paid</text>
+      <line class="e" x1="370" y1="300" x2="370" y2="268" marker-end="url(#m5)"/>
+      <text class="l" x="378" y="290">no charge</text>
+      <line class="e" x1="470" y1="318" x2="518" y2="318" marker-end="url(#m5)"/>
+      <text class="l" x="494" y="310" text-anchor="middle">10×</text>
+      <line class="e" x1="220" y1="388" x2="268" y2="388" marker-end="url(#m5)"/>
+      <text class="l" x="244" y="380" text-anchor="middle">expired</text>
+      <line class="e" x1="370" y1="406" x2="370" y2="498" marker-end="url(#m5)"/>
+      <text class="l" x="378" y="456">refunded</text>
+    </svg>
+    </div>
+    <figcaption>Amber: the outcome is unknown and the provider must be asked. Red: a person decides. A refund whose outcome can't be confirmed also goes to MANUAL_REVIEW, because retrying a payout blindly could pay twice.</figcaption>
+  </figure>
+  <p class="code">Where: <b>services/reservation/sql/migrations/010_reservation_core.sql</b> (trigger) · <b>saga/orchestrator.js</b> (<code>STEP_POLICY</code>, <code>#step</code>)</p>
+</section>
+
+<!-- 6 ─────────────────────────────────────────────── -->
+<section id="outbox">
+  <div class="num">06 · OUTBOX TO CONSUMER</div>
+  <h2>Never lost, never applied twice</h2>
+  <p class="claim">The event is a row written in the same transaction as the business change, so it exists only if the change committed. The relay publishes first and marks second (at-least-once). The consumer writes its dedupe marker in the same transaction as its effect, so a repeat delivery changes nothing.</p>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 980 340" role="img" aria-label="Outbox pipeline. A service transaction writes business rows and an outbox row in one commit. A relay claims the oldest pending row per aggregate with SKIP LOCKED and a lease, sends it to Kafka outside any transaction, then marks it published. Kafka delivers at least once to a consumer that inserts a processed_events marker and its effect in one commit. A crash after sending but before marking causes a duplicate that the consumer skips. A Kafka outage leaves rows pending until the relay drains them.">
+      <defs>
+        <marker id="m6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+        <marker id="m6r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mkr"/></marker>
+      </defs>
+      <rect class="grp" x="20" y="30" width="250" height="186" rx="4"/>
+      <text x="32" y="52" class="t">Service transaction</text>
+      <rect class="b" x="36" y="66" width="218" height="44" rx="3"/>
+      <text x="48" y="85" class="t">business rows</text>
+      <text x="48" y="101" class="s">allocations · ledger · holds</text>
+      <rect class="k" x="36" y="120" width="218" height="44" rx="3"/>
+      <text x="48" y="139" class="t ta">outbox_events row</text>
+      <text x="48" y="155" class="s">PENDING · aggregate_seq</text>
+      <text x="36" y="200" class="t ta">one COMMIT for both</text>
+
+      <line class="e" x1="270" y1="142" x2="328" y2="142" marker-end="url(#m6)"/>
+      <text class="l" x="299" y="134" text-anchor="middle">polls</text>
+
+      <rect class="grp" x="330" y="30" width="260" height="186" rx="4"/>
+      <text x="342" y="52" class="t">Outbox relay (any replica)</text>
+      <rect class="b" x="344" y="64" width="232" height="40" rx="3"/>
+      <text x="354" y="81" class="s">1 claim oldest PENDING per aggregate</text>
+      <text x="354" y="96" class="s">SKIP LOCKED · 30 s lease</text>
+      <rect class="b" x="344" y="112" width="232" height="40" rx="3"/>
+      <text x="354" y="129" class="s">2 send to Kafka</text>
+      <text x="354" y="144" class="s">no database transaction open</text>
+      <rect class="b" x="344" y="160" width="232" height="40" rx="3"/>
+      <text x="354" y="177" class="s">3 mark PUBLISHED</text>
+      <text x="354" y="192" class="s">retry with jitter · 10× → dead letter</text>
+
+      <line class="e" x1="576" y1="132" x2="642" y2="132" marker-end="url(#m6)"/>
+      <rect class="b" x="644" y="104" width="104" height="56" rx="3"/>
+      <text x="696" y="127" text-anchor="middle" class="t">Kafka</text>
+      <text x="696" y="145" text-anchor="middle" class="s">key = aggregate</text>
+      <line class="e" x1="748" y1="132" x2="778" y2="132" marker-end="url(#m6)"/>
+      <text class="l" x="763" y="124" text-anchor="middle">≥1×</text>
+
+      <rect class="grp" x="780" y="30" width="185" height="186" rx="4"/>
+      <text x="792" y="52" class="t">Consumer transaction</text>
+      <rect class="k" x="792" y="66" width="161" height="44" rx="3"/>
+      <text x="802" y="85" class="t ta">processed_events</text>
+      <text x="802" y="101" class="s">PK (consumer, event_id)</text>
+      <rect class="b" x="792" y="120" width="161" height="44" rx="3"/>
+      <text x="802" y="139" class="t">the effect</text>
+      <text x="802" y="155" class="s">email · mark train dirty</text>
+      <text x="792" y="192" class="t ta">one COMMIT,</text><text x="792" y="208" class="t ta">then offset</text>
+
+      <circle class="dot" cx="586" cy="168" r="6"/>
+      <polyline class="e rd" points="586,174 586,262 600,262"/>
+      <text x="606" y="258" class="t tbd">crash after send, before mark</text>
+      <text x="606" y="276" class="s">row is sent again → duplicate delivery →</text>
+      <text x="606" y="292" class="s">processed_events key exists → skipped</text>
+      <circle class="dot" cx="299" cy="158" r="6"/>
+      <polyline class="e rd" points="299,164 299,262 286,262"/>
+      <text x="280" y="258" text-anchor="end" class="t tbd">Kafka down</text>
+      <text x="280" y="276" text-anchor="end" class="s">rows wait as PENDING; bookings continue;</text>
+      <text x="280" y="292" text-anchor="end" class="s">relay drains on recovery (931 events, 0 lost)</text>
+      <text x="20" y="326" class="s">Order: a row is claimable only when no older PENDING row exists for its aggregate, so one train stays in order while trains publish in parallel.</text>
+    </svg>
+    </div>
+    <figcaption>Red dots are the two crash windows the code tests with failpoints (<code>outbox.after_publish_before_mark</code>) and the real outage observed during development.</figcaption>
+  </figure>
+  <p class="code">Where: <b>packages/shared/src/outbox/writer.js</b> · <b>outbox/relay.js</b> (<code>#claim</code>) · <b>consumer/index.js</b> (<code>createIdempotentHandler</code>)</p>
+</section>
+
+<!-- 7 ─────────────────────────────────────────────── -->
+<section id="payment">
+  <div class="num">07 · UNKNOWN PAYMENTS</div>
+  <h2>A timeout is a question, not an answer</h2>
+  <p class="claim">If the provider doesn't answer, the money may already have moved. Marking it failed strands a paying customer; retrying may charge twice. So the payment becomes UNKNOWN and the service asks the provider what happened, using its own idempotency key as the reference.</p>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 980 330" role="img" aria-label="Payment flow. The payment row is committed in CREATED before the provider is called. The charge returns captured, declined, or a timeout or server error. A timeout becomes UNKNOWN. The resolver asks the provider by idempotency key: paid becomes CAPTURED, no record becomes FAILED, unreachable backs off and after ten attempts the saga goes to manual review. The charge is never retried.">
+      <defs>
+        <marker id="m7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+      </defs>
+      <rect class="b" x="20" y="126" width="180" height="56" rx="3"/>
+      <text x="110" y="149" text-anchor="middle" class="t">INSERT payment</text>
+      <text x="110" y="167" text-anchor="middle" class="s">CREATED · committed first</text>
+      <line class="e" x1="200" y1="154" x2="248" y2="154" marker-end="url(#m7)"/>
+      <rect class="b" x="250" y="126" width="170" height="56" rx="3"/>
+      <text x="335" y="149" text-anchor="middle" class="t">provider.charge(key)</text>
+      <text x="335" y="167" text-anchor="middle" class="s">same key → same charge</text>
+      <line class="e" x1="420" y1="140" x2="478" y2="62" marker-end="url(#m7)"/>
+      <line class="e" x1="420" y1="154" x2="478" y2="154" marker-end="url(#m7)"/>
+      <line class="e" x1="420" y1="168" x2="478" y2="244" marker-end="url(#m7)"/>
+      <rect class="ok" x="480" y="40" width="150" height="44" rx="3"/>
+      <text x="555" y="67" text-anchor="middle" class="m tok">CAPTURED</text>
+      <rect class="b" x="480" y="132" width="150" height="44" rx="3"/>
+      <text x="555" y="159" text-anchor="middle" class="m">FAILED</text>
+      <text class="l" x="634" y="158">declined: release seat</text>
+      <rect class="wa" x="480" y="222" width="150" height="44" rx="3"/>
+      <text x="555" y="249" text-anchor="middle" class="m twa">UNKNOWN</text>
+      <text class="l" x="458" y="214" text-anchor="end">timeout · 5xx</text>
+      <line class="e" x1="630" y1="244" x2="668" y2="244" marker-end="url(#m7)"/>
+      <rect class="b" x="670" y="216" width="140" height="56" rx="3"/>
+      <text x="740" y="239" text-anchor="middle" class="t">resolver asks</text>
+      <text x="740" y="257" text-anchor="middle" class="m s">getStatus(key)</text>
+      <line class="e" x1="810" y1="226" x2="824" y2="128" marker-end="url(#m7)"/>
+      <line class="e" x1="810" y1="244" x2="824" y2="200" marker-end="url(#m7)"/>
+      <line class="e" x1="810" y1="262" x2="824" y2="282" marker-end="url(#m7)"/>
+      <rect class="ok" x="826" y="106" width="148" height="40" rx="3"/>
+      <text x="900" y="131" text-anchor="middle" class="s">paid → CAPTURED</text>
+      <rect class="b" x="826" y="180" width="148" height="40" rx="3"/>
+      <text x="900" y="205" text-anchor="middle" class="s">no record → FAILED</text>
+      <rect class="bd" x="826" y="262" width="148" height="48" rx="3"/>
+      <text x="900" y="281" text-anchor="middle" class="s">unreachable: retry</text>
+      <text x="900" y="298" text-anchor="middle" class="s">10× → manual review</text>
+      <text x="20" y="300" class="t tbd">The charge itself is never retried.</text>
+      <text x="20" y="318" class="s">Refunds follow the same rule: an unclear refund waits for a person.</text>
+    </svg>
+    </div>
+    <figcaption>Webhooks arrive alongside this flow. Each is verified by HMAC over the raw body with a 5-minute timestamp window, deduplicated by provider event id, and an out-of-order "authorized after captured" is skipped. A bad signature is logged and never touches the payment.</figcaption>
+  </figure>
+  <p class="code">Where: <b>services/payment/src/service/payment.service.js</b> (<code>charge</code>, <code>resolveUnknown</code>, <code>handleWebhook</code>) · <b>providers/fake.provider.js</b> (fault modes)</p>
+</section>
+
+<!-- 8 ─────────────────────────────────────────────── -->
+<section id="reads">
+  <div class="num">08 · READS VS WRITES</div>
+  <h2>Search may be stale; booking never is</h2>
+  <p class="claim">The booking path talks only to the authority. Search answers from a projection that inventory events mark as dirty and a refresher rebuilds by re-reading inventory. A stale search result can cost a user one retry; it can't sell a seat twice.</p>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 980 300" role="img" aria-label="Write path: browser to reservation saga to inventory engine to the exclusion constraint. Read path: browser to L1 in-process cache, then L2 Redis, then Elasticsearch, falling back to the Postgres projection. Inventory events mark trains dirty; a refresher re-reads inventory and rewrites the projection and the search index.">
+      <defs>
+        <marker id="m8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+        <marker id="m8a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mka"/></marker>
+      </defs>
+      <text x="20" y="24" class="t ta">WRITE · authoritative</text>
+      <rect class="b" x="20" y="36" width="110" height="44" rx="3"/><text x="75" y="63" text-anchor="middle" class="t">Browser</text>
+      <line class="e ac" x1="130" y1="58" x2="178" y2="58" marker-end="url(#m8a)"/>
+      <rect class="b" x="180" y="36" width="160" height="44" rx="3"/><text x="260" y="63" text-anchor="middle" class="t">reservation saga</text>
+      <line class="e ac" x1="340" y1="58" x2="388" y2="58" marker-end="url(#m8a)"/>
+      <rect class="k" x="390" y="36" width="170" height="44" rx="3"/><text x="475" y="63" text-anchor="middle" class="t ta">inventory-engine</text>
+      <line class="e ac" x1="560" y1="58" x2="608" y2="58" marker-end="url(#m8a)"/>
+      <rect class="k" x="610" y="36" width="250" height="44" rx="3"/><text x="735" y="63" text-anchor="middle" class="m ta">constraint decides</text>
+
+      <line class="e" x1="500" y1="80" x2="560" y2="114" marker-end="url(#m8)"/>
+      <text class="l" x="522" y="96" text-anchor="end">events</text>
+      <line class="e da" x1="650" y1="114" x2="545" y2="82" marker-end="url(#m8)"/>
+      <text class="l" x="620" y="96">re-reads segments</text>
+      <rect class="nt" x="540" y="116" width="260" height="40" rx="3"/>
+      <text x="670" y="134" text-anchor="middle" class="t">refresher</text>
+      <text x="670" y="149" text-anchor="middle" class="s">dirty trains, coalesced · resync every 60 s</text>
+      <line class="e" x1="600" y1="156" x2="580" y2="198" marker-end="url(#m8)"/>
+      <line class="e" x1="740" y1="156" x2="760" y2="198" marker-end="url(#m8)"/>
+      <text class="l" x="760" y="180">rewrites</text>
+
+      <text x="20" y="190" class="t">READ · labelled authoritative: false</text>
+      <rect class="b" x="20" y="200" width="110" height="44" rx="3"/><text x="75" y="227" text-anchor="middle" class="t">Browser</text>
+      <line class="e" x1="130" y1="222" x2="168" y2="222" marker-end="url(#m8)"/>
+      <rect class="b" x="170" y="200" width="110" height="44" rx="3"/><text x="225" y="220" text-anchor="middle" class="t">L1</text><text x="225" y="236" text-anchor="middle" class="s">in-process · 1 s</text>
+      <line class="e" x1="280" y1="222" x2="318" y2="222" marker-end="url(#m8)"/>
+      <text class="l" x="299" y="214" text-anchor="middle">miss</text>
+      <rect class="b" x="320" y="200" width="130" height="44" rx="3"/><text x="385" y="220" text-anchor="middle" class="t">L2 Redis</text><text x="385" y="236" text-anchor="middle" class="s">5 s + jitter</text>
+      <line class="e" x1="450" y1="222" x2="508" y2="222" marker-end="url(#m8)"/>
+      <text class="l" x="479" y="214" text-anchor="middle">miss</text>
+      <rect class="b" x="510" y="200" width="150" height="44" rx="3"/><text x="585" y="220" text-anchor="middle" class="t">Elasticsearch</text><text x="585" y="236" text-anchor="middle" class="s">fuzzy stations</text>
+      <line class="e da" x1="660" y1="222" x2="688" y2="222" marker-end="url(#m8)"/>
+      <rect class="b" x="690" y="200" width="200" height="44" rx="3"/><text x="790" y="220" text-anchor="middle" class="t">Postgres projection</text><text x="790" y="236" text-anchor="middle" class="s">fallback · trigram match</text>
+      <text x="20" y="276" class="s">Cache keys carry a version the refresher bumps, so a refresh invalidates every old entry at once. Identical concurrent misses share one query (single-flight).</text>
+      <text x="20" y="294" class="s">Elasticsearch errors open a 10-second breaker; Postgres answers meanwhile and the response says which backend answered.</text>
+    </svg>
+    </div>
+    <figcaption>The dashed arrow back to inventory is the key design choice: events only say "train X changed", and the refresher always re-reads the truth. A lost or reordered event can delay search; it can't leave it permanently wrong.</figcaption>
+  </figure>
+  <p class="code">Where: <b>services/discovery/src/index.js</b> (cache, consumer) · <b>projection.js</b> (refresher) · <b>search-index.js</b> (ES, breaker, fallback)</p>
+</section>
+
+<!-- reading order ─────────────────────────────────── -->
+<section id="order">
+  <div class="num">READING ORDER</div>
+  <h2>One path through the docs and the code</h2>
+  <p class="claim">The docs live in the repository under <code>docs/</code>. Follow this path once; treat everything else as reference you look things up in.</p>
+  <ol class="path">
+    <li><p><span class="f">docs/learn/01-level1-big-picture.md</span><br><span class="w">The one idea and the eight services. Diagrams 1 and 2 on this page.</span></p></li>
+    <li><p><span class="f">docs/learn/02-level2-how-it-works.md</span><br><span class="w">One booking end to end. This is the spine; read it with diagram 4 open.</span></p></li>
+    <li><p><span class="f">Follow the same booking in code</span><br><span class="w">gateway/src/index.js → reservation/src/index.js → saga/orchestrator.js → inventory engine/reserve.js, confirm.js → payment.service.js → shared/outbox → shared/consumer → notification.</span></p></li>
+    <li><p><span class="f">docs/learn/03-level3-deep-dive.md</span><br><span class="w">Each pattern now attaches to code you have already seen. Diagrams 3, 5, 6, 7, 8.</span></p></li>
+    <li><p><span class="f">docs/benchmarks/RESULTS.md · docs/CHALLENGES.md</span><br><span class="w">Why the design looks the way it does: measurements, wrong predictions, bugs found.</span></p></li>
+    <li><p><span class="f">docs/learn/05-failure-scenarios.md</span><br><span class="w">Test yourself: what happens if it crashes right here?</span></p></li>
+    <li><p><span class="f">docs/learn/06-resume-and-interview.md</span><br><span class="w">Pitch, bullets and likely questions. PROJECT_INTERVIEW.md has more questions.</span></p></li>
+  </ol>
+  <p class="ref">Reference, not reading: the concepts primer and glossary, the file-by-file pages (<code>learn/04*</code>), ARCHITECTURE, DATABASE and API.</p>
+  <ul class="rules" aria-label="The five rules">
+    <li><b>Postgres decides</b><span>The database is the only authority on who holds a seat.</span></li>
+    <li><b>No network in a transaction</b><span>Prices are quoted, providers called and events published outside open transactions.</span></li>
+    <li><b>Server-side prices</b><span>A price sent by the browser is ignored.</span></li>
+    <li><b>Timeout means UNKNOWN</b><span>Ask the provider; never assume, never re-charge.</span></li>
+    <li><b>Money needs a person</b><span>Reconciliation repairs inventory automatically, never money.</span></li>
+  </ul>
+</section>
+</div>
+</body>
+</html>

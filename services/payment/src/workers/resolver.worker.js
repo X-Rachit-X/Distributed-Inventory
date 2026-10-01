@@ -17,6 +17,7 @@
  */
 
 const { metrics } = require('@tessera/shared/src/observability/metrics');
+const { STALE_CREATED_SECONDS } = require('../service/payment.service');
 
 class ResolverWorker {
      constructor({ pool, payments, logger, options = {} }) {
@@ -62,13 +63,16 @@ class ResolverWorker {
           // slow provider never holds a database connection.
           const { rows: due } = await this.pool.withTransaction(async (client) =>
                client.query(
+                    // UNKNOWN payments that are due, plus CREATED payments that
+                    // were abandoned mid-charge (the process died after
+                    // committing the row). Both mean "ask the provider".
                     `SELECT id FROM payments
-                      WHERE state = 'UNKNOWN'
-                        AND (next_resolve_at IS NULL OR next_resolve_at <= now())
-                      ORDER BY unknown_since
+                      WHERE (state = 'UNKNOWN' AND (next_resolve_at IS NULL OR next_resolve_at <= now()))
+                         OR (state = 'CREATED' AND created_at < now() - ($2 || ' seconds')::interval)
+                      ORDER BY COALESCE(unknown_since, created_at)
                         FOR UPDATE SKIP LOCKED
                       LIMIT $1`,
-                    [this.opts.batchSize]
+                    [this.opts.batchSize, String(STALE_CREATED_SECONDS)]
                )
           );
 

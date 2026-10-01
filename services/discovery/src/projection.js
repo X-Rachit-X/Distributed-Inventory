@@ -18,6 +18,7 @@
 
 const { fare } = require('@tessera/shared/src/pricing');
 const { metrics } = require('@tessera/shared/src/observability/metrics');
+const { httpRequest } = require('@tessera/shared/src/http/client');
 
 // Seeded routes carry no timetable, so stop times are derived: 150 minutes per
 // stop. A real deployment reads the timetable from the catalogue.
@@ -36,20 +37,14 @@ class Projection {
      }
 
      async #get(path) {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 8000);
-          try {
-               const res = await fetch(`${this.inventoryUrl}${path}`, { signal: controller.signal });
-               if (res.status === 404) {
-                    const err = new Error(`inventory ${path} -> 404`);
-                    err.notFound = true;
-                    throw err;
-               }
-               if (!res.ok) throw new Error(`inventory ${path} -> ${res.status}`);
-               return (await res.json()).data;
-          } finally {
-               clearTimeout(timer);
+          const res = await httpRequest(`${this.inventoryUrl}${path}`, { timeoutMs: 8000 });
+          if (res.status === 404) {
+               const err = new Error(`inventory ${path} -> 404`);
+               err.notFound = true;
+               throw err;
           }
+          if (!res.ok) throw new Error(`inventory ${path} -> ${res.status}`);
+          return res.body.data;
      }
 
      /** Mark a train dirty. Called inside the consumer's dedupe transaction. */
@@ -204,41 +199,64 @@ class Projection {
           return { segments: priced.length, documents: docs.length };
      }
 
-     /** Process dirty trains. Coalesced, crash-safe, safe across replicas. */
+     /**
+      * Process dirty trains. Coalesced, crash-safe, safe across replicas.
+      *
+      * Three short steps with NO transaction held across the network:
+      *   1. lease up to 10 due trains (SKIP LOCKED + a 30 s lease) and commit;
+      *   2. refresh each one, calling inventory and Elasticsearch;
+      *   3. delete the row, but only if nobody marked the train dirty again
+      *      while it was refreshing (same `marked_at`); otherwise just release
+      *      the lease so the newer change gets its own refresh.
+      */
      async tick() {
-          return this.pool.withTransaction(async (client) => {
-               const { rows } = await client.query(
-                    `SELECT event_id, attempts FROM dirty_events
+          const { rows } = await this.pool.query(
+               `WITH due AS (
+                     SELECT event_id FROM dirty_events
+                      WHERE lease_until IS NULL OR lease_until < now()
                       ORDER BY marked_at
                         FOR UPDATE SKIP LOCKED
-                      LIMIT 10`
-               );
-               for (const { event_id: eventId, attempts } of rows) {
-                    try {
-                         await this.refresh(eventId);
-                         // Deleted only after a successful refresh, in the same
-                         // transaction that claimed it: a failed refresh leaves
-                         // the train dirty for the next tick.
-                         await client.query(`DELETE FROM dirty_events WHERE event_id = $1`, [eventId]);
-                    } catch (err) {
-                         if (attempts + 1 >= MAX_REFRESH_ATTEMPTS) {
-                              // Poison: drop it. Resync re-marks the train if it
-                              // still exists, so nothing is lost for good.
-                              await client.query(`DELETE FROM dirty_events WHERE event_id = $1`, [eventId]);
-                              this.logger.error('projection refresh abandoned', { eventId, error: err.message });
-                              continue;
-                         }
-                         // Back of the queue, so one failing train cannot starve the rest.
-                         await client.query(
-                              `UPDATE dirty_events SET attempts = attempts + 1, marked_at = now(), last_error = $2
-                                WHERE event_id = $1`,
-                              [eventId, String(err.message).slice(0, 500)]
-                         );
-                         this.logger.warn('projection refresh failed; requeued', { eventId, error: err.message });
+                      LIMIT 10
+                )
+                UPDATE dirty_events d SET lease_until = now() + interval '30 seconds'
+                  FROM due WHERE d.event_id = due.event_id
+            -- As text: a JS Date keeps milliseconds, Postgres keeps
+            -- microseconds, and the equality check below must be exact.
+            RETURNING d.event_id, d.attempts, d.marked_at::text AS marked_at`
+          );
+
+          for (const { event_id: eventId, attempts, marked_at: markedAt } of rows) {
+               try {
+                    await this.refresh(eventId);
+                    const { rowCount } = await this.pool.query(
+                         `DELETE FROM dirty_events WHERE event_id = $1 AND marked_at = $2::timestamptz`,
+                         [eventId, markedAt]
+                    );
+                    if (rowCount === 0) {
+                         // Re-marked during the refresh: keep it, free it.
+                         await this.pool.query(`UPDATE dirty_events SET lease_until = NULL WHERE event_id = $1`, [
+                              eventId,
+                         ]);
                     }
+               } catch (err) {
+                    if (attempts + 1 >= MAX_REFRESH_ATTEMPTS) {
+                         // Poison: drop it. Resync re-marks the train if it
+                         // still exists, so nothing is lost for good.
+                         await this.pool.query(`DELETE FROM dirty_events WHERE event_id = $1`, [eventId]);
+                         this.logger.error('projection refresh abandoned', { eventId, error: err.message });
+                         continue;
+                    }
+                    // Back of the queue, so one failing train cannot starve the rest.
+                    await this.pool.query(
+                         `UPDATE dirty_events
+                             SET attempts = attempts + 1, marked_at = now(), last_error = $2, lease_until = NULL
+                           WHERE event_id = $1`,
+                         [eventId, String(err.message).slice(0, 500)]
+                    );
+                    this.logger.warn('projection refresh failed; requeued', { eventId, error: err.message });
                }
-               return rows.length;
-          });
+          }
+          return rows.length;
      }
 
      /**

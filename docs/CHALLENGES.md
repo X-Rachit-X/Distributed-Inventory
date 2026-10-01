@@ -1,5 +1,7 @@
 # Challenges, and how they were solved
 
+> 📍 **Reading path, step 5** (with [benchmarks/RESULTS.md](benchmarks/RESULTS.md)): why the design looks the way it does. New here? Start at the [docs home](README.md).
+
 Every item here happened while building Tessera. Each is written in
 Situation → Task → Action → Result form so it can be used directly for
 behavioural questions.

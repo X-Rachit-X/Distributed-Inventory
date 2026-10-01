@@ -40,7 +40,7 @@ in the database (never by counting HTTP responses):
 | **Row-lock queue + constraint (production)** | **1** | **186 ms** | **575** |
 | Redis lock + constraint | 1 (Redis leaked once; constraint caught it) | 10.6 ms | 11,364 |
 
-Plus: **40 integration tests** and **31 end-to-end checks** against the live stack —
+Plus: **50 integration tests** and **39 end-to-end checks** against the live stack —
 50 simultaneous customers for one seat (exactly one wins), idempotent replay, a
 declined payment releasing the seat, a provider timeout resolved to exactly one
 charge, segment resale, the admin policy refusing to seize a sold seat, forged
@@ -79,8 +79,8 @@ npm run console     # http://localhost:5173  (operator login: ops@tessera.dev)
 Proofs:
 
 ```bash
-npm test                                              # 40 integration tests
-npm run e2e                                           # 31 live end-to-end checks
+npm test                                              # 50 integration tests
+npm run e2e                                           # 39 live end-to-end checks
 npm run lab -- run --scenario 1000u-1r --strategy all # concurrency comparison
 npm run chaos -- kafka|redis|payment                  # failure scenarios
 ```
@@ -89,16 +89,19 @@ Full guide: [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md).
 
 ## Documentation
 
-| Document | Contents |
-|---|---|
-| [Getting started](docs/GETTING_STARTED.md) | Setup and a guided walk-through |
-| [Architecture](docs/ARCHITECTURE.md) | How it works, A to Z |
-| [API](docs/API.md) | Every endpoint and event, and how to explain them |
-| [Database](docs/DATABASE.md) | Every schema and constraint, and why |
-| [File guide](docs/FILE_GUIDE.md) | What every file does |
-| [Challenges](docs/CHALLENGES.md) | Problems hit and solved; behavioural answers |
-| [Interview Q&A](docs/PROJECT_INTERVIEW.md) · [HTML guide](docs/interview/tessera-interview-guide.html) | Interview preparation |
-| [Results](docs/benchmarks/RESULTS.md) · [Hypotheses](docs/benchmarks/HYPOTHESES.md) | Measurements, and predictions made before measuring |
+**Start at [`docs/README.md`](docs/README.md).** It has one reading path through
+the whole project, with everything else kept as reference:
+
+1. [Big picture](docs/learn/01-level1-big-picture.md): the one idea and the 8 services
+2. [How it works](docs/learn/02-level2-how-it-works.md): one booking end to end (the spine)
+3. The code, in the order a booking flows (listed on the docs home)
+4. [Deep dive](docs/learn/03-level3-deep-dive.md): every pattern with real code and diagrams
+5. [Results](docs/benchmarks/RESULTS.md) + [Challenges](docs/CHALLENGES.md): why it looks like this
+6. [Failure scenarios](docs/learn/05-failure-scenarios.md) → [Resume & interview](docs/learn/06-resume-and-interview.md)
+
+Prefer pictures? Open [`docs/atlas.html`](docs/atlas.html) in a browser: 8 architecture diagrams on one page.
+Reference: [Architecture](docs/ARCHITECTURE.md) · [Database](docs/DATABASE.md) · [API](docs/API.md) ·
+[File map](docs/learn/04-file-map.md) · [Glossary](docs/learn/07-glossary.md) · [Getting started](docs/GETTING_STARTED.md).
 
 ## Honest scope
 

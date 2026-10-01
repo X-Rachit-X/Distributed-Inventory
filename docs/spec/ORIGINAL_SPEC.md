@@ -1,5 +1,7 @@
 # ScaleRail — Distributed Reservation & Inventory Infrastructure
 
+> 📍 **History:** the original brief from the ScaleRail era. For what was actually built, use the reading path. New here? Start at the [docs home](../README.md).
+
 You are the lead backend/distributed-systems engineer responsible for transforming an existing project called ScaleRail into a technically deep, production-oriented distributed reservation and inventory platform.
 
 The existing project already has a strong architectural foundation:

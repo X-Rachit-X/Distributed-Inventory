@@ -16,7 +16,7 @@
  * is the human path: an operator who has looked at the evidence decides.
  */
 
-require('../../inventory-engine/src/config/env');
+require('@tessera/shared/src/config/env');
 require('@tessera/shared/src/observability/tracing');
 
 const { createPool } = require('@tessera/shared/src/db/pool');
@@ -25,18 +25,18 @@ const { createApp, asyncHandler, errorMiddleware, listen } = require('@tessera/s
 const { NotFoundError, UnauthorizedError, BadRequestError } = require('@tessera/shared/src/errors');
 const { ReconciliationWorker } = require('./worker');
 
-const num = (v, d) => (v === undefined || v === '' ? d : Number(v));
+const { str, num, secret } = require('@tessera/shared/src/config');
 
 const config = {
-     PORT: num(process.env.RECONCILIATION_PORT, 4004),
-     INTERNAL_TOKEN: process.env.INTERNAL_TOKEN || 'dev-internal-token',
-     INTERVAL_MS: num(process.env.RECONCILIATION_INTERVAL_MS, 30_000),
+     PORT: num('RECONCILIATION_PORT', 4004),
+     INTERNAL_TOKEN: secret('INTERNAL_TOKEN'),
+     INTERVAL_MS: num('RECONCILIATION_INTERVAL_MS', 30_000),
      urls: {
-          recon: process.env.RECONCILIATION_DATABASE_URL || 'postgresql://tessera:tessera@localhost:5432/reconciliation',
-          inventory: process.env.INVENTORY_DATABASE_URL || 'postgresql://tessera:tessera@localhost:5432/inventory',
+          recon: str('RECONCILIATION_DATABASE_URL', 'postgresql://tessera:tessera@localhost:5432/reconciliation'),
+          inventory: str('INVENTORY_DATABASE_URL', 'postgresql://tessera:tessera@localhost:5432/inventory'),
           reservation:
-               process.env.RESERVATION_DATABASE_URL || 'postgresql://tessera:tessera@localhost:5432/reservation',
-          payment: process.env.PAYMENT_DATABASE_URL || 'postgresql://tessera:tessera@localhost:5432/payment',
+               str('RESERVATION_DATABASE_URL', 'postgresql://tessera:tessera@localhost:5432/reservation'),
+          payment: str('PAYMENT_DATABASE_URL', 'postgresql://tessera:tessera@localhost:5432/payment'),
      },
 };
 

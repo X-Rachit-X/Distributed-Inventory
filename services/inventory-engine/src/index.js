@@ -15,10 +15,11 @@
  * so a stale read can cost a user a retry but can never cause an oversell.
  */
 
-require('./config/env');
+require('@tessera/shared/src/config/env');
 require('@tessera/shared/src/observability/tracing');
 
 const { createPool } = require('@tessera/shared/src/db/pool');
+const { startOutboxRelay } = require('@tessera/shared/src/outbox/relay');
 const { createLogger } = require('@tessera/shared/src/observability/logger');
 const { createApp, asyncHandler, errorMiddleware, listen } = require('@tessera/shared/src/http/server');
 const { withIdempotency } = require('@tessera/shared/src/idempotency');
@@ -393,40 +394,22 @@ app.use(errorMiddleware(logger));
 
 const expiryWorker = new ExpiryWorker({ pool, logger, options: { batchSize: config.EXPIRY_BATCH_SIZE } });
 
-let outboxRelay = null;
-async function startRelay() {
-     if (!config.KAFKA_BROKERS) {
-          logger.warn('KAFKA_BROKERS not set; outbox relay disabled. Events will accumulate as PENDING.');
-          return null;
-     }
-     const { Kafka } = require('kafkajs');
-     const { OutboxRelay } = require('@tessera/shared/src/outbox/relay');
-
-     const kafka = new Kafka({
-          clientId: 'inventory-engine',
-          brokers: config.KAFKA_BROKERS.split(','),
-          retry: { retries: 8 },
-     });
-     const producer = kafka.producer({ idempotent: true, maxInFlightRequests: 1 });
-     await producer.connect();
-
-     const relay = new OutboxRelay({ pool, producer, logger, service: 'inventory' });
-     relay.start();
-     return { relay, producer };
-}
+let relayHandle = null;
 
 async function main() {
      await pool.query('SELECT 1');
      logger.info('database reachable');
 
      expiryWorker.start();
-     const relayHandle = await startRelay().catch((err) => {
-          // Kafka being unavailable must not stop the service. Outbox rows
-          // accumulate and the relay catches up — that is the whole point.
-          logger.error('outbox relay failed to start; events will accumulate', { error: err.message });
-          return null;
+     // Kafka being unavailable must not stop the service: outbox rows wait as
+     // PENDING and the relay catches up. That is the point of the pattern.
+     relayHandle = await startOutboxRelay({
+          pool,
+          logger,
+          service: 'inventory',
+          brokers: config.KAFKA_BROKERS,
+          clientId: 'inventory-engine',
      });
-     outboxRelay = relayHandle;
 
      listen({
           app,
@@ -435,10 +418,9 @@ async function main() {
           logger,
           workers: [
                { name: 'expiry', stop: () => expiryWorker.stop() },
-               { name: 'outbox-relay', stop: () => outboxRelay?.relay.stop() ?? Promise.resolve() },
+               { name: 'outbox-relay', stop: () => relayHandle?.stop() ?? Promise.resolve() },
           ],
           resources: [
-               { name: 'kafka', close: () => outboxRelay?.producer.disconnect() ?? Promise.resolve() },
                { name: 'postgres', close: () => pool.end() },
           ],
      });

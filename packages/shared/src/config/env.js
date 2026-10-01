@@ -3,6 +3,9 @@
 /**
  * Load .env from the repository root, if present.
  *
+ * Every service, the seed script and the e2e runner require this first, so it
+ * lives in the shared package rather than inside any one service.
+ *
  * Deliberately tolerant: in Docker and in CI the environment is already set and
  * no file exists. A missing .env is normal, not an error.
  */

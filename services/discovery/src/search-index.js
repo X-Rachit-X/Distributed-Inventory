@@ -17,6 +17,8 @@
  * endpoints used here are clearer read as requests than as SDK calls.
  */
 
+const { httpRequest } = require('@tessera/shared/src/http/client');
+
 const INDEX = 'tessera-trips';
 
 class ElasticIndex {
@@ -42,23 +44,19 @@ class ElasticIndex {
      }
 
      async #req(method, path, body) {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 3000);
-          try {
-               const res = await fetch(`${this.url}${path}`, {
-                    method,
-                    signal: controller.signal,
-                    headers: { 'content-type': body && typeof body === 'string' ? 'application/x-ndjson' : 'application/json' },
-                    body: body == null ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
-               });
-               const json = await res.json().catch(() => null);
-               if (!res.ok && res.status !== 404) {
-                    throw new Error(`elasticsearch ${method} ${path} -> ${res.status}: ${JSON.stringify(json?.error ?? json).slice(0, 200)}`);
-               }
-               return { status: res.status, json };
-          } finally {
-               clearTimeout(timer);
+          const ndjson = typeof body === 'string';
+          const res = await httpRequest(`${this.url}${path}`, {
+               method,
+               timeoutMs: 3000,
+               headers: { 'content-type': ndjson ? 'application/x-ndjson' : 'application/json' },
+               body: body == null ? undefined : ndjson ? body : JSON.stringify(body),
+          });
+          if (!res.ok && res.status !== 404) {
+               throw new Error(
+                    `elasticsearch ${method} ${path} -> ${res.status}: ${JSON.stringify(res.body?.error ?? res.body).slice(0, 200)}`
+               );
           }
+          return { status: res.status, json: res.body };
      }
 
      async init() {
@@ -115,7 +113,11 @@ class ElasticIndex {
 
      /** Replace every document for one event. */
      async indexTrip(docs, eventId) {
-          if (!this.url) return;
+          // Respect the breaker on writes too: with Elasticsearch down, every
+          // refresh would otherwise wait out two request timeouts. PostgreSQL
+          // stays current, and the periodic resync re-indexes every train once
+          // the breaker closes.
+          if (!this.url || !this.available()) return;
           try {
                await this.#req('POST', `/${INDEX}/_delete_by_query?refresh=false`, {
                     query: { term: { event_id: eventId } },
@@ -130,8 +132,7 @@ class ElasticIndex {
                await this.#req('POST', '/_bulk', ndjson);
                this.healthy = true;
           } catch (err) {
-               this.healthy = false;
-               this.logger.warn('elasticsearch indexing failed; PostgreSQL remains current', { error: err.message });
+               this.trip(err);
           }
      }
 
