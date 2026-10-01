@@ -1,5 +1,7 @@
 # Architecture — how Tessera works, A to Z
 
+> 📍 **Reference page:** compact, exact facts about the architecture. For the plain-language, step-by-step version read [learn/02](learn/02-level2-how-it-works.md) and [learn/03](learn/03-level3-deep-dive.md). New here? Start at the [docs home](README.md).
+
 ## 1. The problem
 
 Allocate scarce inventory to a very large number of simultaneous claimants so that

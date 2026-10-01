@@ -1,5 +1,7 @@
 # Getting started
 
+> 📍 **Reference page:** install and run. To understand what you are running, start at the reading path. New here? Start at the [docs home](README.md).
+
 From a clean machine to a booking in the browser in about ten minutes.
 
 ## Prerequisites

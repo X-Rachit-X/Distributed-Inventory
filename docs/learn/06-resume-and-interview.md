@@ -1,5 +1,7 @@
 # 06 · Resume value, interview prep, and honest notes
 
+> 📍 **Reading path:** [01](01-level1-big-picture.md) → [02](02-level2-how-it-works.md) → [code](../README.md#step-3-read-the-code-in-the-order-a-booking-flows) → [03](03-level3-deep-dive.md) → [05](05-failure-scenarios.md) → **[06 · you are here](06-resume-and-interview.md)** · [Docs home](../README.md)
+
 ## 1. Is this project worth putting on a resume? Short answer: yes, strongly
 
 Most portfolio backends are CRUD + JWT + maybe Redis. Interviewers have seen

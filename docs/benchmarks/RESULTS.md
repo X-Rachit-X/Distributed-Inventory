@@ -1,5 +1,7 @@
 # Contention Lab — measured results
 
+> 📍 **Reading path, step 5** (with [CHALLENGES.md](../CHALLENGES.md)). The numbers here are the only benchmark numbers used anywhere in the docs. New here? Start at the [docs home](../README.md).
+
 Generated from `bench/results/lab/`. Every figure below came from a run on this machine.
 Nothing here is estimated, rounded for effect, or carried over from another project.
 

@@ -1,5 +1,7 @@
 # Tessera — interview reference
 
+> 📍 **Reference page:** long-form interview Q&A. The short version, with resume bullets and code-review notes, is [learn/06](learn/06-resume-and-interview.md). New here? Start at the [docs home](README.md).
+
 Written for: **you, preparing to defend this project in a technical interview.**
 
 Every claim below is backed by code, a test, or a measured benchmark, and each answer says

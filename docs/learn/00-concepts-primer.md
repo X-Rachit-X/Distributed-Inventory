@@ -1,5 +1,7 @@
 # 00 · Concepts primer — every idea this project uses, from zero
 
+> 📍 **Reference page:** look things up here, no need to read it top to bottom. Reading path: [01](01-level1-big-picture.md) → [02](02-level2-how-it-works.md) → [code](../README.md#step-3-read-the-code-in-the-order-a-booking-flows) → [03](03-level3-deep-dive.md) → [05](05-failure-scenarios.md) → [06](06-resume-and-interview.md) · [Docs home](../README.md) · [File map](04-file-map.md)
+
 This file explains every concept Tessera relies on, before you look at any code.
 It starts basic and gets advanced. Each concept has:
 

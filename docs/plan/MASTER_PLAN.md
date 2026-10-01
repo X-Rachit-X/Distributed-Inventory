@@ -1,5 +1,7 @@
 # ScaleRail v2 — Master Plan
 
+> 📍 **History:** the roadmap from the ScaleRail era. Parts of it describe plans, not the current code; for what exists now, use the reading path. New here? Start at the [docs home](../README.md).
+
 > Source spec: `update.md` (parent folder). This plan turns it into a buildable, ordered roadmap grounded in what the code does **today**.
 > Status: **PLAN ONLY — nothing has been implemented yet.** Reference repos (SeatLock, TicketBlitz, EventCart, TripSaga, hotel-reservation) have **not** been studied yet; claims about them below come only from `update.md`. Research is Phase 0 and will correct this plan where it is wrong.
 

@@ -1,5 +1,7 @@
 # 05 · Failure scenarios — "what happens if X breaks right here?"
 
+> 📍 **Reading path:** [01](01-level1-big-picture.md) → [02](02-level2-how-it-works.md) → [code](../README.md#step-3-read-the-code-in-the-order-a-booking-flows) → [03](03-level3-deep-dive.md) → **[05 · you are here](05-failure-scenarios.md)** → [06](06-resume-and-interview.md) · [Docs home](../README.md)
+
 The best way to understand a reliable system is to break it in your head. Each row
 says **where it breaks**, **what state is left behind**, and **what brings it back
 to correct**. Use this page to rehearse interview answers.

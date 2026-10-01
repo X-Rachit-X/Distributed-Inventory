@@ -1,5 +1,7 @@
 # 04b · File by file — `services/inventory-engine` (the authority)
 
+> 📍 **Reference page:** look things up here, no need to read it top to bottom. Reading path: [01](01-level1-big-picture.md) → [02](02-level2-how-it-works.md) → [code](../README.md#step-3-read-the-code-in-the-order-a-booking-flows) → [03](03-level3-deep-dive.md) → [05](05-failure-scenarios.md) → [06](06-resume-and-interview.md) · [Docs home](../README.md) · [File map](04-file-map.md)
+
 This service is the **only** thing allowed to write allocations. Every other
 service asks it. If you understand this folder, you understand why Tessera can't
 oversell.

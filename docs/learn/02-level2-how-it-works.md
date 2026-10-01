@@ -1,5 +1,7 @@
 # 02 · Level 2 🟡 — How it works (a little deeper)
 
+> 📍 **Reading path:** [01](01-level1-big-picture.md) → **[02 · you are here](02-level2-how-it-works.md)** → [code](../README.md#step-3-read-the-code-in-the-order-a-booking-flows) → [03](03-level3-deep-dive.md) → [05](05-failure-scenarios.md) → [06](06-resume-and-interview.md) · [Docs home](../README.md)
+
 > Goal: follow one booking through every service, table and message. You still
 > don't need to read code, but you will learn the *names* of things so the code
 > becomes familiar later.
@@ -80,7 +82,7 @@ Each service's own tables:
 ## 3. Key nouns in the inventory model
 
 ```
-inventory_event  = "12301 Howrah Rajdhani, 21 Sep"     span_max = 8 stops
+inventory_event  = "12301 Howrah Rajdhani, 21 Sep"     span_max = 7 (8 stops: positions 0…7)
   ├── span_points  = 0:NDLS, 1:CNB, 2:ALD, … 7:HWH
   ├── resource_groups = coach B1 (3A), coach S1 (SL) …
   │     └── inventory_resources = seat B1-23, B1-24, …   (each has a base price)
@@ -94,6 +96,37 @@ inventory_event  = "12301 Howrah Rajdhani, 21 Sep"     span_max = 8 stops
 and `BLOCKED` occupy the seat.
 
 ## 4. One booking, step by step (with names)
+
+The whole flow on one page first. The numbered steps below zoom into each arrow.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant G as Gateway
+    participant R as Reservation API
+    participant S as Saga worker
+    participant P as Pricing
+    participant I as Inventory (authority)
+    participant Y as Payment
+    participant K as Kafka → Notification
+    B->>G: POST /api/reservations + Idempotency-Key
+    G->>R: proxy + x-customer-id
+    R->>P: quote fares (before any DB transaction)
+    P-->>R: fares
+    Note over R: ONE tx: reservation + items + saga row + idempotency record
+    R-->>B: 202 Accepted + pollUrl
+    Note over S: claim saga (SKIP LOCKED + 60 s lease), one step per claim
+    S->>I: reserve (key saga:<id>:hold)
+    Note over I: ONE tx: lock seat rows (sorted) → reap expired → INSERT (constraint decides) → ledger → outbox
+    I-->>S: hold + total
+    S->>Y: charge (key saga:<id>:payment)
+    Y-->>S: CAPTURED  (or UNKNOWN → ask provider, never re-charge)
+    S->>I: confirm: UPDATE … WHERE state='HELD' AND expires_at > now()
+    Note over S: ONE tx: booking TSR-… + outbox booking.confirmed (v2)
+    S--)K: relay publishes, consumer dedupes, exactly one email
+    B->>G: poll GET /api/reservations/:id → "Booked"
+```
 
 ### Step 0: browsing (reads, never authoritative)
 
@@ -211,19 +244,33 @@ payment DB outbox ─relay─► Kafka payment.events      (published; no consum
 
 ## 5. The full saga state machine
 
-```
-                    ┌──────────► HOLD_FAILED ─────────────────────► COMPENSATED
-                    │ (seat taken)
-CREATED ─► HOLD_PENDING ─► HOLD_CREATED ─► PAYMENT_PENDING ─┬─► PAYMENT_AUTHORIZED ─► CONFIRM_PENDING ─► CONFIRMED
-                                                            │          ▲                     │
-                                                            │          │ resolved: paid      │ hold expired after pay
-                                                            ├─► PAYMENT_UNKNOWN ─────────────┤
-                                                            │      │ resolved: not paid      ▼
-                                                            │      ▼                   REFUND_PENDING ─► COMPENSATED
-                                                            └─► PAYMENT_FAILED ─► RELEASE_PENDING ─► RELEASED ─► COMPENSATED
-
-Anything unclear involving money ─► MANUAL_REVIEW (a human decides)
-Any step past its deadline ─► its "onTimeout" target (e.g. PAYMENT_PENDING times out → PAYMENT_UNKNOWN)
+```mermaid
+stateDiagram-v2
+    direction TB
+    [*] --> CREATED
+    CREATED --> HOLD_PENDING
+    HOLD_PENDING --> HOLD_CREATED: seat held
+    HOLD_PENDING --> HOLD_FAILED: 409 seat taken
+    HOLD_CREATED --> PAYMENT_PENDING
+    HOLD_CREATED --> RELEASE_PENDING: customer cancels
+    PAYMENT_PENDING --> PAYMENT_AUTHORIZED: captured
+    PAYMENT_PENDING --> PAYMENT_FAILED: declined
+    PAYMENT_PENDING --> PAYMENT_UNKNOWN: timeout / 5xx
+    PAYMENT_UNKNOWN --> PAYMENT_AUTHORIZED: provider says paid
+    PAYMENT_UNKNOWN --> PAYMENT_FAILED: provider has no charge
+    PAYMENT_UNKNOWN --> MANUAL_REVIEW: unresolved after 10 tries
+    PAYMENT_AUTHORIZED --> CONFIRM_PENDING
+    CONFIRM_PENDING --> CONFIRMED: seat confirmed
+    CONFIRM_PENDING --> REFUND_PENDING: hold expired after payment
+    PAYMENT_FAILED --> RELEASE_PENDING
+    RELEASE_PENDING --> RELEASED
+    RELEASED --> COMPENSATED
+    HOLD_FAILED --> COMPENSATED: nothing to undo
+    REFUND_PENDING --> COMPENSATED: refunded
+    REFUND_PENDING --> MANUAL_REVIEW: refund outcome unknown
+    CONFIRMED --> [*]
+    COMPENSATED --> [*]
+    MANUAL_REVIEW --> [*]: a person decides
 ```
 
 A **database trigger** (`saga_transition_guard`) allows only these arrows.

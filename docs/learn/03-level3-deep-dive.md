@@ -1,5 +1,7 @@
 # 03 · Level 3 🔴 — Deep dive into every pattern
 
+> 📍 **Reading path:** [01](01-level1-big-picture.md) → [02](02-level2-how-it-works.md) → [code](../README.md#step-3-read-the-code-in-the-order-a-booking-flows) → **[03 · you are here](03-level3-deep-dive.md)** → [05](05-failure-scenarios.md) → [06](06-resume-and-interview.md) · [Docs home](../README.md)
+
 > Goal: for each advanced technique, understand **the problem**, **the naive
 > solution and why it breaks**, **what Tessera does**, **the real code**, and
 > **how it is proven**. Read the [primer](00-concepts-primer.md) first if a term is
@@ -7,25 +9,25 @@
 
 ## Summary table (memorise this)
 
-| # | Pattern | One-line purpose | Main file |
-|---|---|---|---|
-| 1 | Exclusion constraint + sorted row-lock queue | never oversell, without deadlocks | `inventory-engine/sql/migrations/010…`, `engine/reserve.js` |
-| 2 | Lazy expiry + sweeper | TTL enforced at the moment of contention | `reserve.js` `reapExpired`, `workers/expiry.worker.js` |
-| 3 | Atomic guarded confirm | an expired hold can never be confirmed | `engine/confirm.js` |
-| 4 | Sharded quantity pools | no single hot counter row | `reserve.js` `claimPool` |
-| 5 | Claim-first idempotency | retries can't double-book; lost responses replay | `shared/src/idempotency` |
-| 6 | Transactional outbox + relay | an event exists iff its change committed | `shared/src/outbox` |
-| 7 | Idempotent consumer + seq guard + DLQ + upcasting | effectively-once effects from at-least-once Kafka | `shared/src/consumer`, `events/` |
-| 8 | Durable orchestrated saga | hold → pay → confirm survives crashes, with compensation | `reservation/src/saga/orchestrator.js` |
-| 9 | UNKNOWN payment state + resolver | a timeout never becomes a double charge or lost money | `payment/src/service/payment.service.js` |
-| 10 | Secure webhooks | forged/replayed/out-of-order webhooks are harmless | same + `providers/fake.provider.js` |
-| 11 | DB-enforced state machines & append-only history | illegal transitions impossible from any code path | the `*_transition_guard` triggers |
-| 12 | Ledger + invariant views | correctness is continuously *checked*, not assumed | `011_ledger…`, `014_ledger_baseline.sql` |
-| 13 | Reconciliation | find what everything else missed; never auto-fix money | `services/reconciliation` |
-| 14 | Admission control | survive a flash sale (rate limit, waiting room, load shed) | `shared/src/admission`, gateway |
-| 15 | Read model + multi-level cache + circuit breaker | fast search that may be stale, labelled honestly | `services/discovery` |
-| 16 | Server-side pricing, shared rules | never trust client prices; search = checkout price | `shared/src/pricing`, `services/pricing` |
-| 17 | Operational shell | timeouts, graceful shutdown, health vs readiness, failpoints, tracing | `shared/src/http`, `db/pool.js`, `failpoints` |
+| # | Pattern | One-line purpose | Protects [booking step](02-level2-how-it-works.md#4-one-booking-step-by-step-with-names) | Main file |
+|---|---|---|---|---|
+| 1 | Exclusion constraint + sorted row-lock queue | never oversell, without deadlocks | 4 reserve | `inventory-engine/sql/migrations/010…`, `engine/reserve.js` |
+| 2 | Lazy expiry + sweeper | TTL enforced at the moment of contention | 4 reserve | `reserve.js` `reapExpired`, `workers/expiry.worker.js` |
+| 3 | Atomic guarded confirm | an expired hold can never be confirmed | 6 confirm | `engine/confirm.js` |
+| 4 | Sharded quantity pools | no single hot counter row | 4 reserve | `reserve.js` `claimPool` |
+| 5 | Claim-first idempotency | retries can't double-book; lost responses replay | 1–2 create, 3 saga calls | `shared/src/idempotency` |
+| 6 | Transactional outbox + relay | an event exists iff its change committed | 7 events | `shared/src/outbox` |
+| 7 | Idempotent consumer + seq guard + DLQ + upcasting | effectively-once effects from at-least-once Kafka | 7 events | `shared/src/consumer`, `events/` |
+| 8 | Durable orchestrated saga | hold → pay → confirm survives crashes, with compensation | 3 saga | `reservation/src/saga/orchestrator.js` |
+| 9 | UNKNOWN payment state + resolver | a timeout never becomes a double charge or lost money | 5 payment | `payment/src/service/payment.service.js` |
+| 10 | Secure webhooks | forged/replayed/out-of-order webhooks are harmless | 5 payment | same + `providers/fake.provider.js` |
+| 11 | DB-enforced state machines & append-only history | illegal transitions impossible from any code path | 3–6 | the `*_transition_guard` triggers |
+| 12 | Ledger + invariant views | correctness is continuously *checked*, not assumed | 4, 6 | `011_ledger…`, `014_ledger_baseline.sql` |
+| 13 | Reconciliation | find what everything else missed; never auto-fix money | 8 auditor | `services/reconciliation` |
+| 14 | Admission control | survive a flash sale (rate limit, waiting room, load shed) | 1 gateway | `shared/src/admission`, gateway |
+| 15 | Read model + multi-level cache + circuit breaker | fast search that may be stale, labelled honestly | 0 browsing | `services/discovery` |
+| 16 | Server-side pricing, shared rules | never trust client prices; search = checkout price | 2 create | `shared/src/pricing`, `services/pricing` |
+| 17 | Operational shell | timeouts, graceful shutdown, health vs readiness, failpoints, tracing | all | `shared/src/http`, `db/pool.js`, `failpoints` |
 
 ---
 
@@ -72,6 +74,25 @@ A GiST exclusion constraint **inserts first, then scans for conflicts**, and
 *waits* on any conflicting transaction that hasn't finished. With hundreds of
 in-flight inserters on one key, they wait on each other in cycles, and Postgres'
 deadlock detector starts killing them.
+
+The two designs side by side. Both are correct; only the waiting differs:
+
+```mermaid
+flowchart LR
+    subgraph F["Constraint alone (lab F): 609 deadlocks, p99 30 s, 9.6 req/s"]
+        direction LR
+        T1((T1)) -- waits on --> T2((T2))
+        T2 -- waits on --> T3((T3))
+        T3 -- waits on --> T4((T4))
+        T4 -- waits on --> T1
+    end
+    subgraph F2["Row-lock queue + constraint (production): 0 deadlocks, p99 186 ms, 575 req/s"]
+        direction LR
+        Q["T1 · T2 · T3 … (FIFO)"] --> L["SELECT … FOR UPDATE<br/>on the seat row"] --> X["INSERT → constraint"]
+        X --> W["1 commits (HELD)"]
+        X --> C["999 × 23P01 → 409"]
+    end
+```
 
 ### The fix: give contention an orderly queue first
 ```js
@@ -231,6 +252,25 @@ marked as such".
 
 ## 6. Transactional outbox
 
+```mermaid
+flowchart LR
+    subgraph TX["Service transaction (one COMMIT)"]
+        BR["business rows<br/>allocations · ledger"]
+        OB["outbox_events row<br/>PENDING"]
+    end
+    subgraph RL["Relay (any replica)"]
+        C1["1 claim oldest PENDING per aggregate<br/>SKIP LOCKED + 30 s lease"] --> C2["2 send to Kafka<br/>(no DB tx open)"] --> C3["3 mark PUBLISHED"]
+    end
+    subgraph CT["Consumer transaction (one COMMIT)"]
+        PE["INSERT processed_events<br/>(consumer, event_id)"] --> EF["the effect<br/>email · mark dirty"]
+    end
+    OB -->|polls| C1
+    C2 -->|"key = aggregate"| K[["Kafka"]]
+    K -->|"delivered ≥ 1×"| PE
+    X1{{"crash after send, before mark"}} -.->|"sent again → duplicate"| PE
+    X2{{"Kafka down"}} -.->|"rows wait as PENDING"| OB
+```
+
 ### Writer: `outbox/writer.js`
 ```js
 async function enqueue(client, args) {          // MUST be the caller's transaction client
@@ -380,6 +420,22 @@ CREATED ─► AUTHORIZED ─► CAPTURED ─► REFUND_PENDING ─► REFUNDED 
    ├─► CANCELLED
    └─► UNKNOWN ─► AUTHORIZED | CAPTURED | FAILED | CANCELLED     (only via asking the provider)
 ```
+```mermaid
+flowchart LR
+    I["INSERT payment CREATED<br/>(committed first)"] --> C["provider.charge(key)"]
+    C -->|ok| CAP["CAPTURED"]
+    C -->|declined| F["FAILED → release seat"]
+    C -->|"timeout / 5xx"| U["UNKNOWN"]
+    U --> R["resolver: getStatus(key)"]
+    R -->|paid| CAP
+    R -->|no record| F2["FAILED"]
+    R -->|"unreachable: backoff, 10× →"| M["MANUAL_REVIEW"]
+    style U fill:#fbefd9,stroke:#a96300
+    style M fill:#fbe3e1,stroke:#b3261e
+```
+
+The charge itself is never retried.
+
 `charge()`:
 1. `INSERT payments … ON CONFLICT (idempotency_key) DO NOTHING`. If the key exists,
    return the existing payment (**never charge again**).
@@ -479,7 +535,7 @@ outage shouldn't look like data corruption.
 8 checks, each with a **grace window** and a **money flag**:
 
 | Check | Grace | Money? | Auto-repair? |
-|---|---|---|---|
+|---|---|---|---|---|
 | DUPLICATE_BOOKING | 0 s | yes | no, escalate |
 | LEDGER_DRIFT | 60 s | no | no (we don't know which side is wrong) |
 | PAYMENT_WITHOUT_BOOKING | 300 s | yes | no, a human decides confirm vs refund |
@@ -537,6 +593,21 @@ lag > 500 ms.
 ---
 
 ## 15. The read side: discovery
+
+```mermaid
+flowchart LR
+    subgraph W["WRITE · authoritative"]
+        B1["Browser"] ==> RS["reservation saga"] ==> INV["inventory-engine"] ==> CN["constraint decides"]
+    end
+    INV -. "inventory.events (signal only)" .-> RF["refresher<br/>dirty trains, coalesced<br/>+ resync every 60 s"]
+    RF -- "re-reads segments" --> INV
+    subgraph RD["READ · authoritative: false"]
+        B2["Browser"] --> L1["L1 in-process · 1 s"] -->|miss| L2["L2 Redis · 5 s + jitter"] -->|miss| ES["Elasticsearch"]
+        ES -.->|"breaker open (10 s)"| PG["Postgres projection"]
+    end
+    RF -->|rewrites| ES
+    RF -->|rewrites| PG
+```
 
 - A consumer marks the train **dirty** (`dirty_events` upsert) in the dedupe
   transaction.

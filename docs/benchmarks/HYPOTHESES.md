@@ -1,5 +1,7 @@
 # Pre-registered hypotheses
 
+> 📍 **Reference page:** the predictions written before measuring. Compare with [RESULTS.md](RESULTS.md). New here? Start at the [docs home](../README.md).
+
 **Written before the first benchmark run.** Committed in advance so the results report can
 record predicted-versus-observed honestly, including the predictions that turn out wrong.
 

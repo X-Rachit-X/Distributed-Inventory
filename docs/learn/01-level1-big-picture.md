@@ -1,5 +1,7 @@
 # 01 · Level 1 🟢 — The big picture
 
+> 📍 **Reading path:** **[01 · you are here](01-level1-big-picture.md)** → [02](02-level2-how-it-works.md) → [code](../README.md#step-3-read-the-code-in-the-order-a-booking-flows) → [03](03-level3-deep-dive.md) → [05](05-failure-scenarios.md) → [06](06-resume-and-interview.md) · [Docs home](../README.md)
+
 > Goal of this page: after reading it you can explain Tessera to a friend, a
 > recruiter or an interviewer in two minutes, without any code.
 
@@ -54,39 +56,51 @@ still say "no" to the second buyer.
 Everything else (Redis, caches, queues, locks) only makes the system **faster or
 nicer**. If any of it breaks, the system gets **slower**, not **wrong**.
 
+What each layer is responsible for. Only the bottom one prevents an oversell:
+
+```mermaid
+flowchart TB
+    A["Admission & caches<br/>rate limit · waiting room · load shed · L1/L2 cache · Elasticsearch<br/><i>if it fails: slower or less fair</i>"]
+    R["Reliability plumbing<br/>idempotency · outbox · dedupe · saga · UNKNOWN payments · reconciliation<br/><i>if it fails: duplicates or stuck flows, flagged and repaired</i>"]
+    T["Throughput<br/>sorted row-lock queue · SKIP LOCKED workers · compare-and-swap<br/><i>if it fails: slower, still correct</i>"]
+    C["CORRECTNESS FLOOR<br/>EXCLUDE USING gist (resource_id WITH =, span WITH &&)<br/><i>second overlapping row → 23P01 → HTTP 409</i>"]
+    A --- R --- T --- C
+    style C fill:#e1eaf7,stroke:#1c52a3,stroke-width:2px
+```
+
 > 🚆 Bonus: because it's a *stretch*, one seat can be sold to Delhi→Kanpur **and**
 > Kanpur→Howrah. That is "segment resale", and it falls out of the model for free.
 
 ## 4. The pieces (8 small services)
 
-Think of a railway station:
+Who talks to whom (solid = HTTP call, dotted = Kafka event, dashed = read-only):
 
+```mermaid
+flowchart TB
+    B["Browser · React console"] -->|"HTTPS /api/*"| G["gateway :4000<br/>rate limit · JWT · waiting room · load shed"]
+    G -->|atomic Lua| R[("Redis")]
+    G -->|proxy| D["discovery :4006<br/>search"]
+    G -->|proxy| P["pricing :4007<br/>fares"]
+    G -->|proxy| RS["reservation :4002<br/>booking API + saga"]
+    G -->|proxy| RC["reconciliation :4004<br/>auditor"]
+    G -->|proxy| N["notification :4005<br/>emails"]
+    RS -->|"quote (before any tx)"| P
+    RS ==>|"reserve · confirm · release"| INV["inventory-engine :4001<br/>THE AUTHORITY"]
+    RS -->|"charge · resolve · refund"| PAY["payment :4003<br/>UNKNOWN-aware"]
+    P -->|reads availability| INV
+    D -->|re-reads availability| INV
+    D -->|index · query| ES[("Elasticsearch")]
+    INV -.->|outbox relay| K[["Kafka"]]
+    RS -.->|outbox relay| K
+    PAY -.->|outbox relay| K
+    K -.->|inventory.events| D
+    K -.->|booking.events| N
+    RC -. "reads every DB (read-only)" .-> PG[("PostgreSQL · one DB per service")]
+    style INV fill:#e1eaf7,stroke:#1c52a3,stroke-width:2px
 ```
-                          You (browser / React console)
-                                     │
-                       ┌─────────────▼─────────────┐
-                       │  GATEWAY  (the ticket gate)│  rate limits, login check,
-                       │                            │  waiting room, crowd control
-                       └──┬──────┬──────┬──────┬───┘
-                          │      │      │      │
-        ┌─────────────────┘      │      │      └─────────────────┐
-        ▼                        ▼      ▼                        ▼
-  DISCOVERY                RESERVATION  PRICING            RECONCILIATION
-  "find me a train"        "book it"    "how much?"        "the auditor"
-  (search, cached)         (the manager       │            (checks everyone
-                            who runs the      │             agrees, every 30 s)
-                            booking steps)    │
-                             │       │        │
-                             ▼       ▼        │
-                     INVENTORY     PAYMENT ◄──┘
-                     ENGINE        "take money,
-                     "THE ONLY      and if unsure,
-                      AUTHORITY      ASK the bank"
-                      on seats"
-                             │
-                             ▼
-                      NOTIFICATION  "send the email, exactly once"
-```
+
+Every service also owns its own PostgreSQL database (not drawn per service, to keep the picture readable).
+
 
 | Service | Port | In one line |
 |---|---|---|

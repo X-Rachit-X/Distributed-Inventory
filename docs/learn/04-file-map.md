@@ -1,4 +1,8 @@
-# File-by-file guide
+# 04 · File map — every file in one table
+
+> **Reading path:** [01 Big picture](01-level1-big-picture.md) → [02 How it works](02-level2-how-it-works.md) → [code](../README.md#step-3-read-the-code-in-the-order-a-booking-flows) → [03 Deep dive](03-level3-deep-dive.md) → [05 Failures](05-failure-scenarios.md) → [06 Interview](06-resume-and-interview.md).
+> This page is **reference**: use it to find a file, then follow the "Line by line" link
+> for the detailed walkthrough of that area.
 
 What every file in the repository does. Generated dependencies (`node_modules`,
 `package-lock.json`) and benchmark artifacts are omitted.
@@ -15,6 +19,8 @@ What every file in the repository does. Generated dependencies (`node_modules`,
 | `.dockerignore`, `.gitignore` | What stays out of images and git |
 
 ## `packages/shared` — correctness primitives used by every service
+
+Line by line: [04a-shared-package.md](04a-shared-package.md)
 
 | File | What it does |
 |---|---|
@@ -45,6 +51,8 @@ What every file in the repository does. Generated dependencies (`node_modules`,
 
 ## `services/inventory-engine` — the authority
 
+Line by line: [04b-inventory-engine.md](04b-inventory-engine.md)
+
 | File | What it does |
 |---|---|
 | `sql/migrations/010_inventory_core.sql` | Events, stops, coaches, seats, holds, **allocations with the exclusion constraint**, pools |
@@ -65,6 +73,8 @@ What every file in the repository does. Generated dependencies (`node_modules`,
 
 ## `services/reservation` — booking API and saga
 
+Line by line: [04c-reservation-saga.md](04c-reservation-saga.md)
+
 | File | What it does |
 |---|---|
 | `sql/migrations/010_reservation_core.sql` | Reservations, items, bookings, sagas (trigger-enforced state machine), saga steps |
@@ -77,6 +87,8 @@ What every file in the repository does. Generated dependencies (`node_modules`,
 
 ## `services/payment`
 
+Line by line: [04d-payment.md](04d-payment.md)
+
 | File | What it does |
 |---|---|
 | `sql/migrations/010_payment_core.sql` | Payments with UNKNOWN state, refunds (≤ captured), provider events (replay protection), signature failures |
@@ -88,6 +100,8 @@ What every file in the repository does. Generated dependencies (`node_modules`,
 
 ## `services/gateway`
 
+Line by line: [04e-gateway-pricing.md](04e-gateway-pricing.md)
+
 | File | What it does |
 |---|---|
 | `src/index.js` | Load shedding, rate limiting, auth, RBAC, waiting room, proxy routes for every public endpoint |
@@ -96,11 +110,15 @@ What every file in the repository does. Generated dependencies (`node_modules`,
 
 ## `services/pricing`
 
+Line by line: [04e-gateway-pricing.md](04e-gateway-pricing.md#part-2--pricing-port-4007)
+
 | File | What it does |
 |---|---|
 | `src/index.js` | `POST /v1/quote` — prices items from live inventory; single-flight cached reads |
 
 ## `services/discovery` — search read model
+
+Line by line: [04f-discovery-notification-reconciliation.md](04f-discovery-notification-reconciliation.md)
 
 | File | What it does |
 |---|---|
@@ -112,12 +130,16 @@ What every file in the repository does. Generated dependencies (`node_modules`,
 
 ## `services/notification`
 
+Line by line: [04f-discovery-notification-reconciliation.md](04f-discovery-notification-reconciliation.md#part-2--notification-port-4005-exactly-one-email)
+
 | File | What it does |
 |---|---|
 | `sql/migrations/010_notifications.sql` | Notifications, unique per source event and template |
 | `src/index.js` | Kafka consumer of `booking.events` (reads v2), exactly-once effect, inbox, DLQ list and replay |
 
 ## `services/reconciliation`
+
+Line by line: [04f-discovery-notification-reconciliation.md](04f-discovery-notification-reconciliation.md#part-3--reconciliation-port-4004-the-auditor)
 
 | File | What it does |
 |---|---|
@@ -129,6 +151,8 @@ What every file in the repository does. Generated dependencies (`node_modules`,
 
 ## `lab` — Contention Lab
 
+Line by line: [04g-lab-bench-tests-console-deploy.md](04g-lab-bench-tests-console-deploy.md)
+
 | File | What it does |
 |---|---|
 | `src/strategies/index.js` | Nine strategies: naive, row lock, SKIP LOCKED, CAS, Redis lock, constraint alone, row lock + constraint, bucketed pool, bulkhead |
@@ -138,6 +162,8 @@ What every file in the repository does. Generated dependencies (`node_modules`,
 
 ## `bench`
 
+Line by line: [04g-lab-bench-tests-console-deploy.md](04g-lab-bench-tests-console-deploy.md#part-2--bench)
+
 | File | What it does |
 |---|---|
 | `src/seed.js` | Deterministic railway inventory (trains, stops with times, coaches, seats, meal pool, opening ledger balance) |
@@ -146,6 +172,8 @@ What every file in the repository does. Generated dependencies (`node_modules`,
 | `results/lab/*.json` | Raw Contention Lab artifacts with seed, commit, environment |
 
 ## `apps/console` — React console
+
+Line by line: [04g-lab-bench-tests-console-deploy.md](04g-lab-bench-tests-console-deploy.md#part-4--appsconsole-react-ui)
 
 | File | What it does |
 |---|---|
@@ -164,6 +192,8 @@ What every file in the repository does. Generated dependencies (`node_modules`,
 
 ## `deploy`
 
+Line by line: [04g-lab-bench-tests-console-deploy.md](04g-lab-bench-tests-console-deploy.md#part-5--deploy)
+
 | File | What it does |
 |---|---|
 | `compose/docker-compose.yml` | Profiles: `core` (Postgres, Redis, Kafka, ES), `obs` (Prometheus, Grafana, Jaeger, Kafka UI), `app` (all services), `lab` (Toxiproxy) |
@@ -175,6 +205,8 @@ What every file in the repository does. Generated dependencies (`node_modules`,
 
 ## `scripts`
 
+Line by line: [04g-lab-bench-tests-console-deploy.md](04g-lab-bench-tests-console-deploy.md#part-6--scripts)
+
 | File | What it does |
 |---|---|
 | `start.sh` | Starts all services detached with per-service logs, waits for health |
@@ -183,16 +215,4 @@ What every file in the repository does. Generated dependencies (`node_modules`,
 
 ## `docs`
 
-| File | What it is |
-|---|---|
-| `GETTING_STARTED.md` | Setup and a guided walk-through |
-| `ARCHITECTURE.md` | How the system works, A to Z |
-| `API.md` | Every endpoint, events, and how to explain them |
-| `DATABASE.md` | Every schema and why |
-| `FILE_GUIDE.md` | This file |
-| `CHALLENGES.md` | Problems hit, how they were solved, behavioural answers |
-| `PROJECT_INTERVIEW.md` | Interview Q&A reference |
-| `interview/tessera-interview-guide.html` | The full interview study guide as a page |
-| `benchmarks/HYPOTHESES.md`, `benchmarks/RESULTS.md` | Predictions registered before running, and measured results |
-| `plan/MASTER_PLAN.md` | The roadmap |
-| `spec/ORIGINAL_SPEC.md` | The original brief |
+See the [docs home](../README.md) for what each document is for and the order to read them in.

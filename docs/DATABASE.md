@@ -1,5 +1,7 @@
 # Database schema
 
+> 📍 **Reference page:** every table and constraint in one place. The SQL is explained line by line in [learn/04b](learn/04b-inventory-engine.md) (inventory), [04c](learn/04c-reservation-saga.md), [04d](learn/04d-payment.md) and [04f](learn/04f-discovery-notification-reconciliation.md). New here? Start at the [docs home](README.md).
+
 PostgreSQL 16. **One database per service** (one instance locally). No query joins
 across databases; reconciliation reads others through read-only access, as a
 documented exception.
