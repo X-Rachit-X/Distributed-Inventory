@@ -20,3 +20,6 @@ coverage/
 .idea/
 .DS_Store
 Thumbs.db
+
+# local Redis snapshots
+dump.rdb
