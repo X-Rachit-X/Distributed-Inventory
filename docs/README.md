@@ -14,6 +14,7 @@ If a doc feels disconnected, come back to this page and find where it fits.
 | 5 | [benchmarks/RESULTS.md](benchmarks/RESULTS.md) + [CHALLENGES.md](CHALLENGES.md) | *why* the design looks like this: measurements, wrong predictions, bugs found | 30 min |
 | 6 | [learn/05 · Failure scenarios](learn/05-failure-scenarios.md) | "what if it crashes right here?", for self-testing | 30 min |
 | 7 | [learn/06 · Resume & interview](learn/06-resume-and-interview.md) | the pitch, resume bullets, likely questions | 30 min |
+| 8 *(when ready)* | [learn/08 · Deployment](learn/08-deployment.md) | how to put it online: one server with HTTPS (recommended), then registry images and Kubernetes | 20 min to read; 1–2 h to deploy |
 
 **Prefer pictures?** Open [`atlas.html`](atlas.html) in a browser: the same story as 8 diagrams on one page.
 The same diagrams are embedded as Mermaid in learn/01–03, so GitHub renders them
@@ -46,6 +47,7 @@ Stuck on a line? The matching line-by-line page is in the
 | A table, constraint or trigger | [DATABASE.md](DATABASE.md) |
 | An endpoint or event shape | [API.md](API.md) |
 | How to install and run it | [GETTING_STARTED.md](GETTING_STARTED.md) |
+| How to deploy it (one server with HTTPS, a registry, Kubernetes), basic to advanced | [learn/08 · Deployment](learn/08-deployment.md) |
 | Long-form interview Q&A | [PROJECT_INTERVIEW.md](PROJECT_INTERVIEW.md) · [HTML guide](interview/tessera-interview-guide.html) |
 | Predictions made before measuring | [benchmarks/HYPOTHESES.md](benchmarks/HYPOTHESES.md) |
 | History: the original brief and plan (ScaleRail era) | [spec/ORIGINAL_SPEC.md](spec/ORIGINAL_SPEC.md) · [plan/MASTER_PLAN.md](plan/MASTER_PLAN.md) |
@@ -55,7 +57,7 @@ Stuck on a line? The matching line-by-line page is in the
 ```mermaid
 flowchart LR
     subgraph PATH["Reading path"]
-        L1["learn/01<br/>big picture"] --> L2["learn/02<br/>one booking"] --> CODE["the code"] --> L3["learn/03<br/>patterns"] --> WHY["RESULTS +<br/>CHALLENGES"] --> L5["learn/05<br/>failures"] --> L6["learn/06<br/>interview"]
+        L1["learn/01<br/>big picture"] --> L2["learn/02<br/>one booking"] --> CODE["the code"] --> L3["learn/03<br/>patterns"] --> WHY["RESULTS +<br/>CHALLENGES"] --> L5["learn/05<br/>failures"] --> L6["learn/06<br/>interview"] -.-> L8["learn/08<br/>deploy it"]
     end
     subgraph REF["Reference shelf"]
         P0["learn/00 primer"]

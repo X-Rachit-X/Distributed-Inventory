@@ -145,6 +145,17 @@ test → fix → prove.*
 | 15 | Three services had no production check on the internal token, and config parsing silently produced `NaN` | weaker production safety | one shared config helper: validated numbers, secrets refused in production everywhere |
 | 16 | Elasticsearch indexing ignored the circuit breaker search already respected | refreshes paid two timeouts each while ES was down | writes respect the breaker; resync re-indexes after recovery |
 
+### Found while preparing deployment
+
+| # | Finding | Impact before | Fix |
+|---|---|---|---|
+| 17 | **The gateway believed any `X-Forwarded-For`** (`trust proxy: true` takes the leftmost entry, which the client writes) | a client could send a new fake IP with every request and never hit the per-IP rate limit | trust the header only from loopback and private-range hops (configurable via `TRUST_PROXY`); proven with a spoofed header from a public address |
+| 18 | Production accepted the public operator email `ops@tessera.dev`, and sign-in has no password | on a public server, anyone could become an operator (block seats, switch payment fault modes) | production refuses the default; the console shows the hint only in development |
+| 19 | `package-lock.json` (made on Windows) recorded only Windows builds of Rollup and esbuild ([npm/cli#4828](https://github.com/npm/cli/issues/4828)) | `npm ci` on Linux (Docker, CI, any server) could not build the console | added the missing platform entries; no version changed |
+| 20 | The Kubernetes base applied a placeholder Secret, lacked `OPERATOR_EMAILS`, and pointed search at an Elasticsearch nothing deployed | a cluster would have run on `replace-me` secrets, or the gateway would not start | the Secret comes from each overlay; keys documented; search uses the Postgres fallback unless configured |
+
+The full deployment guide, with what was and wasn't verified: [08 · Deployment](08-deployment.md).
+
 ### Clean-up (no behaviour change)
 
 `startRelay()` existed in three services, the config helper in eight, and
@@ -169,7 +180,7 @@ The `.env` loader moved from inside the inventory service to the shared package.
   outbox and processed rows.
 - A real payment provider adapter (the fake one stays for chaos tests).
 - Avro or Protobuf + a schema registry with CI compatibility checks.
-- Kubernetes on a real cluster, with PodDisruptionBudgets exercised during a rolling
-  deploy.
+- Kubernetes on a real cluster (the manifests are ready, see [08 · Level 4](08-deployment.md#level-4--kubernetes)),
+  with PodDisruptionBudgets exercised during a rolling deploy.
 
 Next: [07 · Glossary →](07-glossary.md)

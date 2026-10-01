@@ -277,7 +277,8 @@ async function startOutboxRelay({ pool, logger, service, brokers, clientId = ser
           return null;
      }
      const { Kafka } = require('kafkajs');
-     const kafka = new Kafka({ clientId, brokers: brokers.split(','), retry: { retries: 8 } });
+     const { kafkaSecurityOptions } = require('../config/kafka');
+     const kafka = new Kafka({ clientId, brokers: brokers.split(','), retry: { retries: 8 }, ...kafkaSecurityOptions() });
      // Idempotent producer with one request in flight: Kafka itself drops a
      // retried duplicate and cannot reorder two sends from this relay.
      const producer = kafka.producer({ idempotent: true, maxInFlightRequests: 1 });

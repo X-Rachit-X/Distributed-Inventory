@@ -1,0 +1,228 @@
+name: tessera
+
+# =============================================================================
+# Tessera on ONE server: the production-style Compose stack.
+#
+#   cp deploy/compose/prod.env.example deploy/compose/.env   # then edit it
+#   docker compose -f deploy/compose/docker-compose.prod.yml up -d --build
+#   docker compose -f deploy/compose/docker-compose.prod.yml run --rm migrate node bench/src/seed.js --trains 3 --days 2 --stops 8
+#
+# How it differs from docker-compose.yml (the laptop stack):
+#
+#   - Only the edge (Caddy) publishes ports: 80 and 443. PostgreSQL, Redis,
+#     Kafka and the eight services are reachable only on the private network.
+#     The laptop file publishes all of them, which is convenient there and a
+#     hole here (the internal APIs trust the internal token, not the caller).
+#   - Secrets have no defaults. `${VAR:?}` makes Compose stop with a message
+#     if one is missing, instead of booting with something guessable.
+#   - Migrations run once, as their own container, before any service starts
+#     (`service_completed_successfully`). The runner takes an advisory lock, so
+#     a second run waits instead of racing.
+#   - Memory is capped for a small VM: Kafka and Elasticsearch get explicit
+#     heaps. Elasticsearch is optional (profile `search`); without it, search
+#     uses the PostgreSQL fallback that already exists for ES outages.
+#   - Failpoints are off and the payment provider is the built-in FAKE one.
+#     This stack never takes real money.
+#
+# See docs/learn/08-deployment.md for the step-by-step guide.
+# =============================================================================
+
+x-app: &app
+  image: ${TESSERA_IMAGE:-tessera/service:latest}
+  build: { context: ../.., args: { SERVICE: gateway } }
+  restart: unless-stopped
+  networks: [backend]
+  environment: &app-env
+    NODE_ENV: production
+    LOG_LEVEL: ${LOG_LEVEL:-info}
+    INTERNAL_TOKEN: ${INTERNAL_TOKEN:?set INTERNAL_TOKEN in deploy/compose/.env}
+    JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in deploy/compose/.env}
+    WAITING_ROOM_SECRET: ${WAITING_ROOM_SECRET:?set WAITING_ROOM_SECRET in deploy/compose/.env}
+    PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:?set PAYMENT_WEBHOOK_SECRET in deploy/compose/.env}
+    OPERATOR_EMAILS: ${OPERATOR_EMAILS:?set OPERATOR_EMAILS in deploy/compose/.env}
+    WAITING_ROOM_ENABLED: ${WAITING_ROOM_ENABLED:-false}
+    PAYMENT_PROVIDER_MODE: ok
+    KAFKA_BROKERS: kafka:29092
+    REDIS_URL: redis://redis:6379
+    ELASTICSEARCH_URL: ${ELASTICSEARCH_URL:-}
+    INVENTORY_DATABASE_URL: postgresql://tessera:${POSTGRES_PASSWORD}@postgres:5432/inventory
+    RESERVATION_DATABASE_URL: postgresql://tessera:${POSTGRES_PASSWORD}@postgres:5432/reservation
+    PAYMENT_DATABASE_URL: postgresql://tessera:${POSTGRES_PASSWORD}@postgres:5432/payment
+    RECONCILIATION_DATABASE_URL: postgresql://tessera:${POSTGRES_PASSWORD}@postgres:5432/reconciliation
+    NOTIFICATION_DATABASE_URL: postgresql://tessera:${POSTGRES_PASSWORD}@postgres:5432/notification
+    DISCOVERY_DATABASE_URL: postgresql://tessera:${POSTGRES_PASSWORD}@postgres:5432/discovery
+    INVENTORY_URL: http://inventory:4001
+    RESERVATION_URL: http://reservation:4002
+    PAYMENT_URL: http://payment:4003
+    RECONCILIATION_URL: http://reconciliation:4004
+    NOTIFICATION_URL: http://notification:4005
+    DISCOVERY_URL: http://discovery:4006
+    PRICING_URL: http://pricing:4007
+  depends_on: &app-deps
+    migrate: { condition: service_completed_successfully }
+    redis: { condition: service_healthy }
+    kafka-init: { condition: service_completed_successfully }
+  logging: &logging
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+services:
+  # ── Data ──────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tessera
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/compose/.env}
+      POSTGRES_DB: postgres
+    command: ["postgres", "-c", "max_connections=200", "-c", "shared_buffers=256MB", "-c", "log_lock_waits=on"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Creates the six databases and extensions on first start only.
+      - ./init/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tessera -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks: [backend]
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks: [backend]
+    logging: *logging
+
+  kafka:
+    image: confluentinc/cp-kafka:7.7.1
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      # One internal listener only: nothing outside this network needs Kafka.
+      KAFKA_LISTENERS: PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:-tessera-prod-cluster-0}
+    volumes: [kafka_data:/var/lib/kafka/data]
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server kafka:29092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+    networks: [backend]
+    logging: *logging
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.7.1
+    depends_on: { kafka: { condition: service_healthy } }
+    volumes: [./init/kafka/create-topics.sh:/create-topics.sh:ro]
+    command: ["bash", "/create-topics.sh"]
+    restart: on-failure
+    networks: [backend]
+
+  # Optional. Enable with `--profile search` and ELASTICSEARCH_URL=http://elasticsearch:9200.
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes: [es_data:/usr/share/elasticsearch/data]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    networks: [backend]
+    profiles: [search]
+    logging: *logging
+
+  # ── One-shot jobs ─────────────────────────────────────────────────────────
+  # Applies every pending migration, then exits 0. Services wait for it.
+  # Also the container used for one-off commands, e.g. seeding:
+  #   docker compose -f deploy/compose/docker-compose.prod.yml run --rm migrate node bench/src/seed.js
+  migrate:
+    <<: *app
+    restart: "no"
+    command: ["node", "packages/shared/src/db/migrate-cli.js"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  # ── Application tier: one image, eight entry points ──────────────────────
+  inventory:
+    <<: *app
+    environment: { <<: *app-env, SERVICE_ENTRY: services/inventory-engine/src/index.js }
+  payment:
+    <<: *app
+    environment: { <<: *app-env, SERVICE_ENTRY: services/payment/src/index.js }
+  pricing:
+    <<: *app
+    environment: { <<: *app-env, SERVICE_ENTRY: services/pricing/src/index.js }
+  reservation:
+    <<: *app
+    environment: { <<: *app-env, SERVICE_ENTRY: services/reservation/src/index.js }
+  reconciliation:
+    <<: *app
+    environment: { <<: *app-env, SERVICE_ENTRY: services/reconciliation/src/index.js }
+  notification:
+    <<: *app
+    environment: { <<: *app-env, SERVICE_ENTRY: services/notification/src/index.js }
+  discovery:
+    <<: *app
+    environment: { <<: *app-env, SERVICE_ENTRY: services/discovery/src/index.js }
+  gateway:
+    <<: *app
+    environment: { <<: *app-env, SERVICE_ENTRY: services/gateway/src/index.js }
+
+  # ── Edge: the only container with published ports ─────────────────────────
+  edge:
+    image: ${TESSERA_EDGE_IMAGE:-tessera/edge:latest}
+    build: { context: ../.., dockerfile: deploy/edge/Dockerfile }
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      # Certificates live here. Losing it means re-issuing, and Let's Encrypt
+      # rate-limits repeated issuance for the same domain.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [gateway]
+    networks: [backend]
+    logging: *logging
+
+volumes:
+  postgres_data:
+  redis_data:
+  kafka_data:
+  es_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  backend:
+    driver: bridge

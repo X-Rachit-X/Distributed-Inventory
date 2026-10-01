@@ -1,9 +1,13 @@
+# Application tier only. The secret `tessera-secrets` is NOT part of the base:
+# each overlay supplies it (overlays/local generates it from secrets.env;
+# production creates it from a secret manager). A placeholder secret here would
+# be applied as-is, and production mode accepts any non-dev value, so the
+# cluster would run on guessable secrets.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - namespace.yaml
   - configmap.yaml
-  - secret.example.yaml
   - migrate-job.yaml
   - gateway.yaml
   - inventory.yaml
@@ -13,5 +17,7 @@ resources:
   - notification.yaml
   - discovery.yaml
   - pricing.yaml
+  - edge.yaml
+  - ingress.yaml
   - hpa.yaml
   - pdb.yaml

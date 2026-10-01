@@ -1,0 +1,37 @@
+# A real cluster. Before applying:
+#   1. Replace OWNER and the tag with your registry path (images published by
+#      .github/workflows/images.yml), and tessera.example.com with your domain.
+#   2. Create the `tessera-secrets` Secret in namespace `tessera` from your
+#      secret manager (keys: see base/secret.example.yaml). It is deliberately
+#      not generated here.
+#   3. Point base/configmap.yaml (or a patch here) at your managed PostgreSQL,
+#      Redis and Kafka.
+#
+#   kubectl apply -k deploy/k8s/overlays/production
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+images:
+  - name: tessera/service
+    newName: ghcr.io/OWNER/tessera-service
+    newTag: v1.0.0
+  - name: tessera/edge
+    newName: ghcr.io/OWNER/tessera-edge
+    newTag: v1.0.0
+patches:
+  - target: { kind: Ingress, name: tessera }
+    patch: |-
+      # Your controller's IngressClass (`kubectl get ingressclass`).
+      - op: add
+        path: /spec/ingressClassName
+        value: traefik
+      - op: replace
+        path: /spec/rules/0/host
+        value: tessera.example.com
+      - op: add
+        path: /metadata/annotations
+        value: { cert-manager.io/cluster-issuer: letsencrypt }
+      - op: add
+        path: /spec/tls
+        value: [{ hosts: [tessera.example.com], secretName: tessera-tls }]

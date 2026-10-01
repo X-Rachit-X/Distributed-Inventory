@@ -85,12 +85,13 @@ coloured table and writes JSON artifacts to `bench/results/lab/<scenario>-<ts>-<
 |---|---|
 | `src/seed.js` | deterministic data from a **mulberry32 PRNG** (seed 42): real station codes (NDLS, CNB, ALD… HWH), train names (Howrah Rajdhani…), classes 1A/2A/3A/SL with prices and coach sizes; per train×day: an `inventory_events` row (`span_max = stops − 1`, metadata with train number/name), `span_points`, coaches, seats with grid positions, a meal pool with buckets, and **`recordCapacity`** (the ledger opening balance). `npm run seed` = 3 trains × 2 days × 8 stops |
 | `src/e2e.js` | **39 live checks** through the gateway: services reachable; booking reaches CONFIRMED with a reference; the seat is CONFIRMED in the DB; idempotent replay (marked `replayed`, only one allocation); concurrent customers on one seat → exactly one wins and everyone gets an answer; a declined payment doesn't confirm, the seat is released and can be resold; a provider timeout → **charged exactly once**; overlapping segment refused, disjoint segment allowed; block a free seat, a blocked seat can't be sold, a sold seat can't be blocked; unauthenticated internal call → 401; forged webhook → 400; another customer's reservation → 404; every invariant = 0 |
+| `src/smoke.js` | **deployment smoke test**: only public `/api/*` routes through the edge (console page, invariants, sign-in, book a seat → CONFIRMED, cancel). `npm run smoke -- https://your-domain`. See [08](08-deployment.md) |
 | `k6/flash-sale.js` | 200 VUs, one iteration each, racing for a few seats through the full HTTP stack; counters for accepted / conflict / rate-limited / server errors; threshold `server_errors < 5`; **teardown fails the run if any invariant is violated**. Written but not yet run (stated honestly in the README) |
 | `results/lab/*.json` | raw artifacts behind `docs/benchmarks/RESULTS.md` |
 
 ---
 
-## Part 3 — Tests (`npm test`, 40 total)
+## Part 3 — Tests (`npm test`, 50 total)
 
 `node --test --test-concurrency=1` over four files:
 
@@ -133,18 +134,25 @@ proxies `/api` to the gateway on :4000.
 | File | What |
 |---|---|
 | `compose/docker-compose.yml` | profiles: **core** = Postgres 16 (with `pg_stat_statements`, `max_connections=200`, `log_lock_waits`, `deadlock_timeout=200ms`), Redis 7 (AOF, `noeviction`), Kafka 7.7 in **KRaft** mode (no ZooKeeper, auto-create topics **off**), a `kafka-init` job, Elasticsearch 8 single-node; **obs** = Prometheus :9091, Grafana :3002, Jaeger :16687, Kafka UI :8080; **app** = all services from one image; **lab** = Toxiproxy (network fault injection) |
+| `compose/docker-compose.prod.yml` | **the single-server deployment**: only the edge publishes ports (80/443); secrets required via `${VAR:?}`; a one-shot `migrate` container that services wait on (`service_completed_successfully`); Kafka heap capped, Elasticsearch optional (profile `search`); log rotation. Walkthrough: [08 · Level 2](08-deployment.md#level-2--one-server-on-the-internet-recommended) |
+| `compose/prod.env.example` | every production setting with comments; copied to `deploy/compose/.env` (git-ignored) |
+| `edge/Caddyfile`, `edge/Dockerfile` | the edge image: console production build + Caddy. `/api/*` → gateway, everything else → static files with SPA fallback, automatic HTTPS when `SITE_ADDRESS` is a domain, cache and security headers, `X-Forwarded-For` trusted only from private hops |
 | `compose/init/postgres/01-databases.sql` | creates the 6 databases, extensions per DB (`btree_gist`, `pgcrypto`, `pg_trgm`, `pg_stat_statements`), and the `tessera_readonly` role with SELECT on inventory/reservation/payment (for reconciliation). The comment: why separate *databases* not schemas ("you have to write a saga") |
 | `compose/init/kafka/create-topics.sh` | idempotent topic creation: `*.events` with 6 partitions (3 for less busy ones), `*.dlq` with 30-day retention, replication 1 (laptop; 3 in a real cluster) |
 | `prometheus/prometheus.yml` | scrapes all 8 services' `/metrics` |
 | `grafana/…` | datasource + the "correctness and flow" dashboard |
-| `k8s/base/*.yaml` | per service: Deployment (rolling update, maxUnavailable 0, non-root, **read-only root FS**, no privilege escalation, requests/limits) + Service; **readiness → `/ready`, liveness → `/health`** ("never dependencies: a DB outage must not become a restart loop"); `hpa.yaml` (gateway 2-10, reservation 3-12 on CPU 70%); `pdb.yaml` (min available); `migrate-job.yaml` (runs `migrate-cli.js`; the advisory lock handles concurrent runs); `configmap.yaml`, `secret.example.yaml`, `namespace.yaml`, `kustomization.yaml`; `overlays/local` |
+| `k8s/base/*.yaml` | per service: Deployment (rolling update, maxUnavailable 0, non-root, **read-only root FS**, no privilege escalation, requests/limits) + Service; **readiness → `/ready`, liveness → `/health`** ("never dependencies: a DB outage must not become a restart loop"); `hpa.yaml` (gateway 2-10, reservation 3-12 on CPU 70%); `pdb.yaml` (min available); `migrate-job.yaml` (runs `migrate-cli.js`; the advisory lock handles concurrent runs); `configmap.yaml`, `namespace.yaml`, `kustomization.yaml`; `edge.yaml` + `ingress.yaml` (one rule → edge); `secret.example.yaml` lists the Secret's keys but is **not applied** (each overlay supplies the Secret); `overlays/local` (kind: 1 replica, Secret from `secrets.env`), `overlays/production` (registry images, domain, TLS); `infra/` (single-replica Postgres, Redis, Kafka + topics Job for a learning cluster) |
 
 `Dockerfile`: two stages. `deps` runs `npm ci --omit=dev` for all workspaces; the
 runtime image is `node:22-alpine` with `ARG SERVICE` → `SERVICE_ENTRY`, `USER node`,
 and `CMD node $SERVICE_ENTRY`. **One image for all eight services.**
 
-> ⚠️ Honest scope (from README): the K8s manifests are production-shaped but have
-> **not** been run on a cluster.
+`.github/workflows/images.yml` builds both images and pushes them to ghcr.io on a
+manual run or a `v*` tag.
+
+> ⚠️ Honest scope: the K8s manifests build and pass `kubeconform -strict`, but have
+> **not** been run on a cluster. What was verified for each deployment path is listed
+> at the end of [08 · Deployment](08-deployment.md#what-has-been-verified-and-what-has-not).
 
 ---
 

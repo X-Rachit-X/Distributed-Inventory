@@ -262,7 +262,10 @@ use the same views:
 - Customers cannot read each other's reservations (404, not 403).
 - Webhook HMAC + timestamp window + event-id replay protection.
 - Prices are server-side only.
-- Production refuses to start with development secrets.
+- Production refuses to start with development secrets, or with the public demo
+  operator email (sign-in is passwordless, so that address would make anyone an operator).
+- Client IPs come from `X-Forwarded-For` only via private-network proxies, so the
+  per-IP rate limit cannot be dodged with a forged header.
 - Append-only audit and ledger tables.
 
 ## 16. Consistency guarantees
@@ -277,10 +280,16 @@ use the same views:
 ## 17. Deployment
 
 - **Local**: `npm run up` (infra) + `npm run start` (services on the host).
-- **Compose**: `npm run up:app` builds one image (`SERVICE` build arg) for all eight.
-- **Kubernetes**: `deploy/k8s` — kustomize base with probes (liveness ≠ readiness),
-  PodDisruptionBudgets, HPAs, non-root, read-only root FS, a migration Job.
-  Production-shaped, **not exercised on a cluster**.
+- **Compose (laptop)**: `npm run up:app` builds one image (`SERVICE` build arg) for all eight.
+- **One server**: `deploy/compose/docker-compose.prod.yml`. Only the edge (Caddy:
+  console build, `/api` proxy, automatic HTTPS) publishes ports; secrets are required;
+  migrations run first in their own container. Verified in production mode
+  (smoke 9/9, e2e 39/39) except as containers, which the authoring sandbox could not pull.
+- **Kubernetes**: `deploy/k8s`, a kustomize base with probes (liveness ≠ readiness),
+  PodDisruptionBudgets, HPAs, non-root, read-only root FS, a migration Job, edge +
+  ingress; `local` and `production` overlays; single-replica data services for a
+  learning cluster. Schema-validated, **not exercised on a cluster**.
+- Step by step, basic to advanced: [learn/08 · Deployment](learn/08-deployment.md).
 
 ## 18. What was deliberately not built
 

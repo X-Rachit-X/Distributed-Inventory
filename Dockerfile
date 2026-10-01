@@ -23,6 +23,9 @@ COPY --from=deps /app/node_modules node_modules
 COPY package.json ./
 COPY packages packages
 COPY services services
+# bench/ carries the seed script, so a deployment can load demo data with the
+# same image: `docker compose run --rm migrate node bench/src/seed.js`.
+COPY bench bench
 # Unprivileged user: a compromised service should not own its container.
 USER node
 EXPOSE 4000-4007

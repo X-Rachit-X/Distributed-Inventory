@@ -7,7 +7,9 @@ data:
   NODE_ENV: production
   KAFKA_BROKERS: kafka.tessera-infra.svc:9092
   REDIS_URL: redis://redis.tessera-infra.svc:6379
-  ELASTICSEARCH_URL: http://elasticsearch.tessera-infra.svc:9200
+  # Empty: search uses the PostgreSQL fallback. Set to your Elasticsearch URL
+  # (e.g. http://elasticsearch.tessera-infra.svc:9200) to enable full-text search.
+  ELASTICSEARCH_URL: ""
   INVENTORY_URL: http://inventory:4001
   RESERVATION_URL: http://reservation:4002
   PAYMENT_URL: http://payment:4003

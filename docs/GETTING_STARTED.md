@@ -137,6 +137,10 @@ restart the services.
 npm run up:app     # builds one image, runs all eight services in compose
 ```
 
+That is still the laptop setup (every port published, placeholder secrets). It runs
+in production mode, so the operator sign-in there is `ops-local@tessera.dev`. To put Tessera
+on a server with HTTPS, or on Kubernetes, follow [learn/08 · Deployment](learn/08-deployment.md).
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |

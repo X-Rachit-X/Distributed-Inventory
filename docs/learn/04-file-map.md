@@ -15,7 +15,8 @@ What every file in the repository does. Generated dependencies (`node_modules`,
 | `CLAUDE.md` | Context file for AI coding sessions: rules, layout, commands |
 | `package.json` | npm workspaces root and every `npm run` command |
 | `.env.example` | Every configuration variable with development defaults |
-| `Dockerfile` | One image for all backend services; `SERVICE` build arg picks the entry point |
+| `Dockerfile` | One image for all backend services; `SERVICE` build arg picks the entry point; includes `bench/` so a deployment can seed |
+| `.github/workflows/images.yml` | Builds and publishes the service and edge images to ghcr.io (manual run or `v*` tag) |
 | `.dockerignore`, `.gitignore` | What stays out of images and git |
 
 ## `packages/shared` — correctness primitives used by every service
@@ -28,6 +29,7 @@ Line by line: [04a-shared-package.md](04a-shared-package.md)
 | `sql/001_append_only.sql` | Trigger function that blocks UPDATE/DELETE on history tables |
 | `src/config/env.js` | `.env` loader required first by every service, the seed and the e2e runner (real environment variables win) |
 | `src/config/index.js` | `str`, `num` (validated), `flag`, `secret` (refuses dev secrets in production): the one config helper every service uses |
+| `src/config/kafka.js` | Optional Kafka TLS/SASL from `KAFKA_SSL` / `KAFKA_SASL_*`, for managed Kafka; used by the relay and the consumer runner |
 | `src/db/pool.js` | PostgreSQL pool with statement/lock/idle-in-transaction timeouts as startup options; `withTransaction()` |
 | `src/db/migrate.js` | Checksummed, advisory-locked plain-SQL migration runner |
 | `src/db/migrate-cli.js` | `npm run migrate`: applies shared + per-service migrations to each database |
@@ -111,7 +113,7 @@ Line by line: [04e-gateway-pricing.md](04e-gateway-pricing.md)
 |---|---|
 | `src/index.js` | Load shedding, rate limiting, auth, RBAC, waiting room, proxy routes for every public endpoint |
 | `src/auth.js` | HS256 JWT sign/verify with constant-time comparison |
-| `src/config/index.js` | Upstream URLs, secrets, limits, operator emails |
+| `src/config/index.js` | Upstream URLs, secrets, limits, operator emails (production refuses the public default `ops@tessera.dev`) |
 
 ## `services/pricing`
 
@@ -175,6 +177,7 @@ Line by line: [04g-lab-bench-tests-console-deploy.md](04g-lab-bench-tests-consol
 |---|---|
 | `src/seed.js` | Deterministic railway inventory (trains, stops with times, coaches, seats, meal pool, opening ledger balance) |
 | `src/e2e.js` | 39 end-to-end checks against the live stack, including cancellation and search |
+| `src/smoke.js` | Deployment smoke test through the public URL only: book, confirm, cancel |
 | `k6/flash-sale.js` | k6 flash-sale load test through the gateway; passes only if invariants hold |
 | `results/lab/*.json` | Raw Contention Lab artifacts with seed, commit, environment |
 
@@ -204,11 +207,15 @@ Line by line: [04g-lab-bench-tests-console-deploy.md](04g-lab-bench-tests-consol
 | File | What it does |
 |---|---|
 | `compose/docker-compose.yml` | Profiles: `core` (Postgres, Redis, Kafka, ES), `obs` (Prometheus, Grafana, Jaeger, Kafka UI), `app` (all services), `lab` (Toxiproxy) |
+| `compose/docker-compose.prod.yml`, `compose/prod.env.example` | Single-server production stack: only the edge is published, required secrets, migrate-first |
+| `edge/Caddyfile`, `edge/Dockerfile` | Edge image: console build + Caddy (TLS, `/api` proxy, SPA fallback) |
 | `compose/init/postgres/01-databases.sql` | Creates the six databases, extensions, read-only role |
 | `compose/init/kafka/create-topics.sh` | Creates 13 topics with explicit partitions |
 | `prometheus/prometheus.yml` | Scrapes all eight services |
 | `grafana/provisioning/*`, `grafana/dashboards/tessera.json` | Datasource and the correctness-and-flow dashboard |
-| `k8s/base/*`, `k8s/overlays/local/*`, `k8s/README.md` | Production-shaped Kubernetes manifests (not exercised on a cluster) |
+| `k8s/base/*`, `k8s/overlays/{local,production}/*`, `k8s/infra/*`, `k8s/README.md` | Kubernetes manifests: app base with edge + ingress, local and production overlays, learning-cluster data services (schema-validated, not run on a cluster) |
+
+How to use all of this: [08 · Deployment](08-deployment.md).
 
 ## `scripts`
 

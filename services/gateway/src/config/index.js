@@ -1,6 +1,21 @@
 'use strict';
 
-const { str, num, flag, secret } = require('@tessera/shared/src/config');
+const { str, num, flag, secret, isProduction } = require('@tessera/shared/src/config');
+
+const DEFAULT_OPERATOR_EMAIL = 'ops@tessera.dev';
+
+function operatorEmails() {
+     const emails = str('OPERATOR_EMAILS', DEFAULT_OPERATOR_EMAIL)
+          .split(',')
+          .map((e) => e.trim().toLowerCase())
+          .filter(Boolean);
+     if (isProduction() && emails.includes(DEFAULT_OPERATOR_EMAIL)) {
+          throw new Error(
+               `OPERATOR_EMAILS must not include ${DEFAULT_OPERATOR_EMAIL} in production: sign-in has no password, so anyone could become an operator`
+          );
+     }
+     return emails;
+}
 
 const config = {
      NODE_ENV: str('NODE_ENV', 'development'),
@@ -16,7 +31,11 @@ const config = {
 
      // Emails granted the OPERATOR role at sign-in. Demo-grade identity: a real
      // deployment takes roles from the identity provider's claims.
-     OPERATOR_EMAILS: str('OPERATOR_EMAILS', 'ops@tessera.dev').split(',').map((e) => e.trim().toLowerCase()),
+     //
+     // Sign-in has no password, so in a public deployment whoever types an
+     // operator email IS an operator. The address therefore works like a
+     // shared secret, and production refuses the well-known default.
+     OPERATOR_EMAILS: operatorEmails(),
      REDIS_URL: str('REDIS_URL', 'redis://localhost:6379'),
 
      INTERNAL_TOKEN: secret('INTERNAL_TOKEN'),

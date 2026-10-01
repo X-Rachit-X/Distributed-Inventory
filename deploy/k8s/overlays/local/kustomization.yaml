@@ -1,3 +1,11 @@
+# A learning cluster (kind, k3d, minikube, Docker Desktop):
+#
+#   cp deploy/k8s/overlays/local/secrets.env.example deploy/k8s/overlays/local/secrets.env
+#   kubectl apply -k deploy/k8s/overlays/local
+#
+# Images are the locally built `tessera/service:dev` and `tessera/edge:dev`,
+# loaded into the cluster (e.g. `kind load docker-image ...`), so nothing is
+# pulled from a registry.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
@@ -5,3 +13,29 @@ resources:
 images:
   - name: tessera/service
     newTag: dev
+  - name: tessera/edge
+    newTag: dev
+secretGenerator:
+  - name: tessera-secrets
+    namespace: tessera
+    envs: [secrets.env]
+generatorOptions:
+  disableNameSuffixHash: true
+patches:
+  # One replica each: a laptop cluster has little room, and correctness does
+  # not depend on the replica count anyway.
+  - target: { kind: Deployment }
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target: { kind: HorizontalPodAutoscaler }
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+  - target: { kind: PodDisruptionBudget }
+    patch: |-
+      - op: replace
+        path: /spec/minAvailable
+        value: 0
