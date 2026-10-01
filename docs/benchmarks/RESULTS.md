@@ -92,12 +92,17 @@ other, the wait graph develops cycles, and the deadlock detector begins aborting
 F2 takes a row lock on the resource first — sorted, so multi-resource requests cannot form
 cycles either — and then inserts.
 
+Both rows below come from **one run** (`1000u-1r-2026-09-20T10-04-06`), so they compare
+like with like:
+
 | | Deadlocks | p99 | req/s |
 |---|---:|---:|---:|
-| F — constraint alone | 609 | 30,008ms | 9.6 |
+| F — constraint alone | 876 | 30,005ms | 6.7 |
 | F2 — row lock, then constraint | **0** | **186ms** | **575** |
 
-Same correctness, 86× the throughput. **This finding changed the production code**: the row
+Same correctness, 86× the throughput (575.4 ÷ 6.7). F's numbers vary between runs: the
+headline run in §1 measured 609 deadlocks and 9.6 req/s. Against that run's figure the
+gain is 60×, so "60–86×" is the honest range, and 86× is the same-run comparison. **This finding changed the production code**: the row
 lock is now step 4 of `services/inventory-engine/src/engine/reserve.js`.
 
 The row lock is a throughput optimisation. The constraint remains the authority. If a future

@@ -133,7 +133,8 @@ Why the row lock exists: the constraint alone is correct but collapsed under
 contention — 1,000 requests for one seat produced **609 deadlocks** and a 30-second
 p99, because a GiST exclusion constraint inserts and *then* scans for conflicts,
 waiting on in-progress inserters, which forms wait cycles. Queueing on the row first
-gave 0 deadlocks and a 186ms p99 (86× throughput).
+gave 0 deadlocks and a 186ms p99: 86× the throughput of the constraint alone in a
+side-by-side run (60× against the first run's figure).
 
 ## 6. Time: holds and expiry
 

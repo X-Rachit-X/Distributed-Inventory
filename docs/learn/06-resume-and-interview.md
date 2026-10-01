@@ -35,8 +35,10 @@ horizontal scaling curve. All numbers come from one laptop.
   1,000 simultaneous buyers per seat, by counting stored rows.
 - Built a **Contention Lab** comparing 9 locking strategies under 1,000-to-1
   contention. Showed naive check-then-write sold one seat to **64 customers**, and
-  found that the constraint alone caused **609 deadlocks**. A sorted row-lock queue
-  in front of it gave **0 deadlocks, 186 ms p99 and 86× the throughput**.
+  found that the constraint alone deadlocked **609 of 1,000** requests. A sorted
+  row-lock queue in front of it gave **0 deadlocks, 186 ms p99 and 86× the throughput**
+  (measured side by side in one run; 60× against the first run's figure, so say
+  "60–86×" if asked).
 - Guaranteed **no lost and no duplicate side effects** with a transactional outbox
   (per-aggregate ordered relay, jittered retries, dead-lettering), claim-first
   idempotency keys with response replay, and **idempotent Kafka consumers** that

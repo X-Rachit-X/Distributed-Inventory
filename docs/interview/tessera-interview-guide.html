@@ -680,7 +680,7 @@ publish(); COMMIT   <i>→ rollback leaves a lie on the bus</i></div>
       <div class="evidence">
         <div class="ev bad"><p class="label">Naive strategy</p><p class="value">64</p><p class="note">customers sold one seat</p></div>
         <div class="ev good"><p class="label">Production path</p><p class="value">0</p><p class="note">oversells at 1000 users : 1 seat</p></div>
-        <div class="ev warn"><p class="label">Throughput fix</p><p class="value">86×</p><p class="note">9.6 → 575 req/s, 609 → 0 deadlocks</p></div>
+        <div class="ev warn"><p class="label">Throughput fix</p><p class="value">86×</p><p class="note">6.7 → 575 req/s, 876 → 0 deadlocks (same run)</p></div>
         <div class="ev good"><p class="label">Outbox under outage</p><p class="value">931</p><p class="note">events held, all published, 0 lost</p></div>
       </div>
 

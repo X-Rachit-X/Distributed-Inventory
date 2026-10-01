@@ -127,7 +127,7 @@ async function reserve(client, req) {
      // Taking a row lock on the resources first gives that contention an
      // ORDERLY place to queue: one waiter at a time per resource, FIFO, no
      // cycles. Same workload, same correctness, 0 deadlocks, p99 186ms, 575
-     // requests/second — an 86x improvement.
+     // req/s: 86x the constraint alone in the same run (docs/benchmarks/RESULTS.md).
      //
      // This lock is a THROUGHPUT optimisation, not the correctness mechanism.
      // The exclusion constraint below remains the authority. If a future code

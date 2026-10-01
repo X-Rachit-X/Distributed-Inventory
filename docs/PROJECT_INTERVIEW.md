@@ -148,10 +148,11 @@ row lock on the resource first, in sorted order.
 
 | | Deadlocks | p99 | req/s |
 |---|---:|---:|---:|
-| Constraint alone | 609 | 30,008ms | 9.6 |
+| Constraint alone | 876 | 30,005ms | 6.7 |
 | Row lock, then constraint | **0** | **186ms** | **575** |
 
-Same correctness, 86× the throughput. This changed the production code — it is step 4 of
+Same correctness, 86× the throughput, measured side by side in one run. (The 609 deadlocks
+and 9.6 req/s above are from an earlier run; F varies run to run, so the range is 60–86×.) This changed the production code — it is step 4 of
 `services/inventory-engine/src/engine/reserve.js`, with the measurement in the comment.
 
 **The framing that matters:** the row lock is a *throughput* optimisation. The constraint

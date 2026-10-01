@@ -25,7 +25,9 @@ behavioural questions.
   waiting on in-progress inserters; those waits formed cycles.
 - **Action.** Queue on the resource row first (sorted `SELECT … FOR UPDATE`), keep
   the constraint as the authority.
-- **Result.** 0 deadlocks, 186 ms p99, 575 req/s. My pre-registered prediction was
+- **Result.** 0 deadlocks, 186 ms p99, 575 req/s. Run side by side with the
+  constraint-alone strategy (876 deadlocks, 6.7 req/s in that run), that is 86× the
+  throughput; against the first run's 9.6 req/s it is 60×. My pre-registered prediction was
   wrong and the write-up says so.
 
 ### 3. The Redis lock was 1,000× faster than predicted — and leaked

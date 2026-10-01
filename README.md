@@ -40,6 +40,10 @@ in the database (never by counting HTTP responses):
 | **Row-lock queue + constraint (production)** | **1** | **186 ms** | **575** |
 | Redis lock + constraint | 1 (Redis leaked once; constraint caught it) | 10.6 ms | 11,364 |
 
+Rows come from two runs of the same scenario on the same commit. In the run that measured
+both, the row-lock queue was 86× the constraint alone (6.7 → 575 req/s); details in
+[RESULTS.md](docs/benchmarks/RESULTS.md).
+
 Plus: **50 integration tests** and **39 end-to-end checks** against the live stack —
 50 simultaneous customers for one seat (exactly one wins), idempotent replay, a
 declined payment releasing the seat, a provider timeout resolved to exactly one
