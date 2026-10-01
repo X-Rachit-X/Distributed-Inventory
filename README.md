@@ -91,6 +91,7 @@ Full guide: [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md).
 
 | Document | Contents |
 |---|---|
+| **[Learn Tessera (course)](docs/learn/README.md)** | **Start here if the project feels big:** concepts from zero, three levels of depth, every file explained, failure scenarios, resume and interview guide |
 | [Getting started](docs/GETTING_STARTED.md) | Setup and a guided walk-through |
 | [Architecture](docs/ARCHITECTURE.md) | How it works, A to Z |
 | [API](docs/API.md) | Every endpoint and event, and how to explain them |
