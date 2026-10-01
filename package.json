@@ -27,6 +27,7 @@
     "console": "npm run dev --workspace @tessera/console",
     "test": "node --test --test-concurrency=1 services/inventory-engine/test/integration/reserve.test.js services/reservation/test/integration/saga.test.js services/reconciliation/test/reconciliation.test.js packages/shared/test/admission.test.js",
     "e2e": "node bench/src/e2e.js",
+    "smoke": "node bench/src/smoke.js",
     "lab": "node lab/src/cli/lab.js",
     "chaos": "bash scripts/chaos.sh"
   },

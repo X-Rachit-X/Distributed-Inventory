@@ -271,6 +271,12 @@ Failpoint names in the code: `outbox.before_publish`,
   value refuses to boot. Every service's `config/index.js` is built from these, so
   all of them now get that production check (three had none before).
 
+`kafka.js`: `kafkaSecurityOptions()` turns `KAFKA_SSL=true` and
+`KAFKA_SASL_MECHANISM` / `_USERNAME` / `_PASSWORD` into KafkaJS `ssl` / `sasl`
+options. Empty by default (plain text on a private network); managed Kafka needs
+them. Both Kafka clients spread it in, so they can't disagree. See
+[08 · Level 4](08-deployment.md#43-a-real-cluster).
+
 ## `src/http/client.js`, outbound calls with a deadline
 
 `httpRequest(url, {method, headers, json, body, timeoutMs = 5000, as})` →
@@ -285,7 +291,7 @@ what a 404 or 409 means. Also `isHealthy(baseUrl)` for readiness probes and
 
 | Lines | What | Why |
 |---|---|---|
-| 38-44 | Express app, hide `x-powered-by`, `trust proxy`, JSON body limit 256 kb | |
+| 38-60 | Express app, hide `x-powered-by`, **`trust proxy`** = `loopback, linklocal, uniquelocal` (or `TRUST_PROXY`), JSON body limit 256 kb | `X-Forwarded-For` is believed only when it arrives through a private-network hop (Caddy, a Docker network, a k8s ingress). It used to be `true`, which believes the leftmost entry, written by the client, so anyone could fake an IP per request and dodge the per-IP rate limit |
 | ~48-59 | middleware: `requestId` = header or new UUID; `correlationId` = header or requestId; `traceId` from `traceparent`; set `req.context`; echo `x-request-id`; run the rest inside `withContext(...)` | every log line in this request automatically carries the ids |
 | ~61-76 | request logging on `finish`: 5xx → error, 4xx → **debug**, else info | conflicts are normal; logging them as errors trains people to ignore logs |
 | ~79-83 | `GET /health`: always ok + uptime | **liveness never checks dependencies**: a DB outage must not cause a restart loop |

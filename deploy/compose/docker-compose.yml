@@ -271,6 +271,9 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change-me-jwt}
       WAITING_ROOM_SECRET: ${WAITING_ROOM_SECRET:-change-me-wr}
       PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-change-me-webhook}
+      # Production mode refuses the public demo address; this laptop-only stack
+      # uses a local one. Sign in with it for the operator role.
+      OPERATOR_EMAILS: ${OPERATOR_EMAILS:-ops-local@tessera.dev}
       KAFKA_BROKERS: kafka:29092
       REDIS_URL: redis://redis:6379
       ELASTICSEARCH_URL: http://elasticsearch:9200

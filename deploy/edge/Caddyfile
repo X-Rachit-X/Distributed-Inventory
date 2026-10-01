@@ -1,0 +1,65 @@
+# =============================================================================
+# The edge: the only thing the internet talks to.
+#
+#   /api/*   → the gateway (auth, rate limit, waiting room, routing)
+#   anything else → the console's static build, with SPA fallback
+#
+# One origin for both means the browser never makes a cross-origin call, so
+# CORS needs no configuration, exactly as with the Vite dev proxy.
+#
+# SITE_ADDRESS decides TLS:
+#   ":80"                    plain HTTP on any address (first deploy, or behind
+#                            a load balancer / Kubernetes ingress that does TLS)
+#   "tessera.example.com"    Caddy fetches and renews a Let's Encrypt
+#                            certificate itself. Needs a DNS A record pointing
+#                            at the server and ports 80 + 443 open.
+# =============================================================================
+{
+	# Nothing should reconfigure the edge at runtime.
+	admin off
+
+	servers {
+		# Accept X-Forwarded-For only from private-network hops (a Kubernetes
+		# ingress, a cloud load balancer inside the VPC). From anyone else,
+		# i.e. a browser on the internet, it is ignored and the real
+		# connecting address is used, so a client cannot fake its IP.
+		trusted_proxies static private_ranges
+	}
+}
+
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	handle /api/* {
+		# Forwards X-Forwarded-For with the client address appended. The
+		# gateway trusts that header only from private-network hops, which is
+		# what this container is.
+		reverse_proxy {$GATEWAY_UPSTREAM:gateway:4000}
+	}
+
+	handle {
+		root * /srv
+		# Hashed asset files never change, so they can be cached for a year;
+		# index.html must always be re-checked so a deploy is picked up.
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@html path / /index.html
+		header @html Cache-Control "no-cache"
+
+		# Client-side routes (/seats/..., /ops) are served index.html.
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

@@ -20,3 +20,9 @@ coverage/
 .idea/
 .DS_Store
 Thumbs.db
+
+# local Redis snapshots
+dump.rdb
+
+# Kubernetes secrets generated from local env files
+deploy/k8s/**/secrets.env

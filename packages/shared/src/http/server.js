@@ -29,6 +29,17 @@ const { withContext, addContext } = require('../observability/logger');
 const { TesseraError } = require('../errors');
 const failpoints = require('../failpoints');
 
+const DEFAULT_TRUST_PROXY = 'loopback, linklocal, uniquelocal';
+
+/** Express `trust proxy` from an env value: true/false, a hop count, or a subnet list. */
+function parseTrustProxy(raw) {
+     if (raw === undefined || raw === '') return DEFAULT_TRUST_PROXY;
+     if (raw === 'true') return true;
+     if (raw === 'false') return false;
+     if (/^\d+$/.test(raw)) return Number(raw);
+     return raw;
+}
+
 /**
  * @param {object} opts
  * @param {string} opts.name
@@ -39,7 +50,14 @@ function createApp({ name, logger, dependencies = [] }) {
      const app = express();
 
      app.disable('x-powered-by');
-     app.set('trust proxy', true);
+     // Which hops may report the client's address in X-Forwarded-For. `true`
+     // would believe the leftmost entry, which the client writes itself, so
+     // anyone could pick a fresh IP per request and walk past the gateway's
+     // per-IP rate limit. Trusting only loopback and private ranges means a
+     // forwarded address is accepted from a reverse proxy, a Docker network or
+     // a Kubernetes ingress, and ignored from anyone on the public internet.
+     // TRUST_PROXY overrides it (e.g. a hop count such as `1`, or `false`).
+     app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY));
      app.use(express.json({ limit: '256kb' }));
 
      // Correlation. Every log line, every event and every downstream call in

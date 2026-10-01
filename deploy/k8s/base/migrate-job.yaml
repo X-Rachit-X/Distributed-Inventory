@@ -1,5 +1,11 @@
 # Runs schema migrations before a rollout. The runner takes an advisory lock,
 # so a second concurrent run waits rather than racing.
+#
+# A Job's pod template is immutable: on an upgrade, delete the finished Job
+# first (`kubectl -n tessera delete job migrate`) so the new image runs.
+# On a first install, wait for it to complete before the services take traffic
+# (`kubectl -n tessera wait --for=condition=complete job/migrate`); services
+# that start earlier log errors against missing tables until it has run.
 apiVersion: batch/v1
 kind: Job
 metadata:

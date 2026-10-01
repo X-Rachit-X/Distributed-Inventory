@@ -1,0 +1,23 @@
+# The one way in from outside the cluster. Everything goes to the edge, which
+# splits /api (gateway) from the console, so this needs a single rule.
+#
+# Needs an ingress controller in the cluster. The class is left to the overlay
+# (production sets it), because it depends on the cluster: Traefik, a cloud
+# load balancer class, or another controller. On a local kind cluster you can
+# skip the ingress and use `kubectl port-forward svc/edge 8080:80` instead.
+# HTTPS: cert-manager with a ClusterIssuer named letsencrypt; the production
+# overlay adds the annotation, the tls block and the real host.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tessera
+  namespace: tessera
+spec:
+  rules:
+    - host: tessera.localtest.me
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: edge, port: { name: http } }

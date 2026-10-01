@@ -76,7 +76,13 @@ export default function Operations() {
 
                {role !== 'OPERATOR' ? (
                     <div className="card p-4 text-sm text-slate-400">
-                         Operator actions need the OPERATOR role. Sign in as <span className="font-mono">ops@tessera.dev</span>.
+                         Operator actions need the OPERATOR role.
+                         {import.meta.env.DEV && (
+                              <>
+                                   {' '}
+                                   Sign in as <span className="font-mono">ops@tessera.dev</span>.
+                              </>
+                         )}
                     </div>
                ) : (
                     <div className="space-y-6">

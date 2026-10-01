@@ -1,0 +1,59 @@
+# The edge: Caddy serving the console build and proxying /api to the gateway
+# (same image and Caddyfile as the Compose deployment). TLS is the ingress's
+# job here, so Caddy listens on plain :8080 inside the cluster.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edge
+  namespace: tessera
+  labels: { app: edge, part-of: tessera }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: edge }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  template:
+    metadata:
+      labels: { app: edge, part-of: tessera }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000 }
+      containers:
+        - name: edge
+          image: tessera/edge:latest
+          env:
+            - { name: SITE_ADDRESS, value: ":8080" }
+            - { name: GATEWAY_UPSTREAM, value: "gateway:4000" }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /, port: http }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            # Caddy keeps state under XDG_DATA_HOME (/data) and XDG_CONFIG_HOME
+            # (/config). Without certificates to store, scratch space is enough.
+            - { name: data, mountPath: /data }
+            - { name: config, mountPath: /config }
+      volumes:
+        - { name: data, emptyDir: {} }
+        - { name: config, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: edge
+  namespace: tessera
+spec:
+  selector: { app: edge }
+  ports:
+    - { name: http, port: 80, targetPort: http }

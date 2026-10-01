@@ -58,11 +58,12 @@ services/
   discovery/        :4006  search read model: Kafka-driven projection, Elasticsearch + PG fallback, L1/L2 cache
   pricing/          :4007  server-side fares (distance share × demand tier)
 lab/                Contention Lab: 9 concurrency strategies, verified against DB rows
-bench/              seed.js, e2e.js (39 live checks), k6/flash-sale.js, results/
+bench/              seed.js, e2e.js (39 live checks), smoke.js (deploy check via public URL), k6/flash-sale.js, results/
 apps/console/       React + Vite + Tailwind console (search, seat map, live saga, ops, scoreboard)
-deploy/             compose (profiles core/obs/app/lab), prometheus, grafana, k8s (kustomize)
+deploy/             compose (laptop profiles core/obs/app/lab + docker-compose.prod.yml for one server),
+                   edge (Caddy + console image), prometheus, grafana, k8s (base, overlays, infra)
 scripts/            start.sh / stop.sh / chaos.sh
-docs/               architecture, API, database, file guide, challenges, benchmarks, interview guide
+docs/               architecture, API, database, learn/ course (08 = deployment guide), benchmarks, interview
 ```
 
 ## Commands
@@ -80,6 +81,8 @@ npm run e2e         # 39 end-to-end checks against the running stack
 npm run lab -- run --scenario 1000u-1r --strategy all
 npm run chaos -- kafka|redis|payment
 npm run up:obs      # prometheus :9091, grafana :3002, jaeger :16687
+npm run smoke -- https://host   # after a deploy: book + cancel through the public URL
+# deploy to a server: docs/learn/08-deployment.md (docker-compose.prod.yml + deploy/compose/.env)
 ```
 
 Operator login in the console: `ops@tessera.dev`. Any other email is a customer.
@@ -100,6 +103,7 @@ Operator login in the console: `ops@tessera.dev`. Any other email is a customer.
 
 ## Status
 
-Built and verified: everything above. Not exercised: K8s manifests (production-shaped
-only), k6 script (written, not yet run), multi-instance scaling curve (2 reservation
+Built and verified: everything above. Not exercised: K8s manifests (schema-validated,
+not run on a cluster), the prod compose file as containers (validated, and every
+step below it verified on the host), k6 script (written, not yet run), multi-instance scaling curve (2 reservation
 workers verified correct, no curve measured). All numbers are from one laptop.

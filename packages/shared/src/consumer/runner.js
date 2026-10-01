@@ -24,6 +24,7 @@
 const { Kafka, logLevel } = require('kafkajs');
 const { withDLQ } = require('./index');
 const { metrics, client: promClient, registry } = require('../observability/metrics');
+const { kafkaSecurityOptions } = require('../config/kafka');
 
 const consumerLag = new promClient.Gauge({
      name: 'tessera_kafka_consumer_lag',
@@ -58,6 +59,7 @@ async function startConsumer({
      const kafka = new Kafka({
           clientId,
           brokers: brokers.split(','),
+          ...kafkaSecurityOptions(),
           logLevel: logLevel.WARN,
           retry: { retries: 10, initialRetryTime: 300 },
      });
